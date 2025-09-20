@@ -1,0 +1,16 @@
+pandas
+numpy
+scikit-learn
+ccxt
+apscheduler
+joblib
+requests
+tqdm
+scipy
+matplotlib
+seaborn
+plotly
+fastapi
+uvicorn[standard]
+jinja2
+aiofiles
