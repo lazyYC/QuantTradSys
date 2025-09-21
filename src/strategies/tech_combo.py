@@ -1,5 +1,6 @@
 ﻿import itertools
 import logging
+import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence
 
@@ -70,24 +71,53 @@ def decisions_to_position(decisions: Sequence[str]) -> pd.Series:
         elif decision == "SELL":
             position = 0
         position_trace.append(position)
-    return pd.Series(position_trace)
+    return pd.Series(position_trace, dtype=float)
 
 
 def evaluate_strategy(df: pd.DataFrame, params: StrategyParams) -> Dict[str, float]:
     """回測指定參數組合並計算績效指標。"""
+    if df.empty:
+        return {
+            "annualized_return": 0.0,
+            "total_return": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "trades": 0,
+        }
+
     feature_steps = make_feature_steps(params)
     scorer = make_scorer(params)
     signal_df = generate_signal_frame(df, feature_steps, [scorer])
     signal_df = signal_df.reset_index(drop=True)
 
-    price_returns = signal_df["close"].pct_change().fillna(0.0)
-    positions = decisions_to_position(signal_df["signal"]).shift(1).fillna(0)
-    strategy_returns = price_returns * positions
+    if signal_df.empty:
+        return {
+            "annualized_return": 0.0,
+            "total_return": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "trades": 0,
+        }
+
+    price_returns = signal_df["close"].pct_change()
+    price_returns = price_returns.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+    positions = decisions_to_position(signal_df["signal"]).shift(1).fillna(0.0)
+    strategy_returns = (price_returns * positions).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+    if strategy_returns.empty:
+        return {
+            "annualized_return": 0.0,
+            "total_return": 0.0,
+            "sharpe": 0.0,
+            "max_drawdown": 0.0,
+            "trades": int((signal_df["signal"] == "BUY").sum()),
+        }
 
     cumulative = (1 + strategy_returns).cumprod()
     total_return = cumulative.iloc[-1] - 1 if not cumulative.empty else 0.0
     periods = max(len(strategy_returns), 1)
     annualized = (1 + total_return) ** (PERIODS_PER_YEAR / periods) - 1
+
     volatility = strategy_returns.std(ddof=0)
     sharpe = (strategy_returns.mean() / volatility * np.sqrt(PERIODS_PER_YEAR)) if volatility > 0 else 0.0
 
@@ -122,12 +152,26 @@ def grid_search(
             continue
         params = StrategyParams(ma_fast=ma_fast, ma_slow=ma_slow, rsi_period=rsi_period, rsi_threshold=rsi_th)
         metrics = evaluate_strategy(df, params)
-        metrics.update({
-            "ma_fast": ma_fast,
-            "ma_slow": ma_slow,
-            "rsi_period": rsi_period,
-            "rsi_threshold": rsi_th,
-        })
+        if any(
+            not math.isfinite(metrics[key])
+            for key in ("annualized_return", "total_return", "sharpe", "max_drawdown")
+        ):
+            LOGGER.debug(
+                "Skip params due to non-finite metrics | ma_fast=%s ma_slow=%s rsi_period=%s rsi_th=%s",
+                ma_fast,
+                ma_slow,
+                rsi_period,
+                rsi_th,
+            )
+            continue
+        metrics.update(
+            {
+                "ma_fast": ma_fast,
+                "ma_slow": ma_slow,
+                "rsi_period": rsi_period,
+                "rsi_threshold": rsi_th,
+            }
+        )
         results.append(metrics)
     results.sort(key=lambda item: item["annualized_return"], reverse=True)
     return results[:top_n]
@@ -135,17 +179,24 @@ def grid_search(
 
 def generate_realtime_signal(df: pd.DataFrame, params: StrategyParams) -> str:
     """以最佳參數產出最新訊號並透過通知元件發佈。"""
+    if df.empty:
+        dispatch_signal("HOLD", {"reason": "empty_dataframe"})
+        return "HOLD"
     feature_steps = make_feature_steps(params)
     scorer = make_scorer(params)
-    signal_subset = df.tail(max(params.ma_slow, params.rsi_period) + 5).reset_index(drop=True)
+    subset_length = max(params.ma_slow, params.rsi_period) + 5
+    signal_subset = df.tail(subset_length).reset_index(drop=True)
     signal_df = generate_signal_frame(signal_subset, feature_steps, [scorer])
     latest_row = signal_df.iloc[-1]
     decision = latest_row["signal"]
-    dispatch_signal(decision, {
-        "timestamp": str(latest_row["timestamp"]),
-        "close": float(latest_row["close"]),
-        "params": params.__dict__,
-    })
+    dispatch_signal(
+        decision,
+        {
+            "timestamp": str(latest_row["timestamp"]),
+            "close": float(latest_row["close"]),
+            "params": params.__dict__,
+        },
+    )
     return decision
 
 
@@ -157,4 +208,3 @@ __all__ = [
     "make_feature_steps",
     "make_scorer",
 ]
-

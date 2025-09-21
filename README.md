@@ -7,6 +7,7 @@
 - ✅ SQLite 持久層與增量更新流程（自動清理超過觀察窗口的舊資料）
 - ✅ 訊號產生管線（函數式組合，可整合 rule-based / ML 評分器）
 - ✅ 技術指標快速回測 + 即時訊號流程（基礎網格搜尋）
+- ✅ 策略參數儲存與通知流程雛型（SQLite / Discord Webhook）
 
 ## 資料抓取元件使用說明
 1. 安裝依賴：`pip install -r requirements.txt`
@@ -102,3 +103,42 @@ print('latest signal', result['signal'])
 - [ ] 串接回測框架與策略倉儲流程
 
 
+## 策略參數訓練與儲存
+```python
+from pathlib import Path
+from pipelines.quick_backtest import train_and_store_best_params
+
+train_result = train_and_store_best_params(
+    symbol="BTC/USDT",
+    timeframe="5m",
+    lookback_days=365,
+    output_path=None,
+    params_store_path=Path("storage/strategy_state.db"),
+)
+print(train_result['best_params'])
+```
+
+- 建議週期：每週或每月重新訓練一次，更新最佳參數並存放於 `storage/strategy_state.db`。
+- 參數檔案會與績效指標一併儲存，供即時訊號流程引用。
+
+## 即時輪詢流程
+```python
+from pathlib import Path
+from pipelines.quick_backtest import run_realtime_cycle
+
+cycle_result = run_realtime_cycle(
+    symbol="BTC/USDT",
+    timeframe="5m",
+    lookback_days=365,
+    params_store_path=Path("storage/strategy_state.db"),
+)
+print(cycle_result['signal'])
+```
+
+- 建議排程：每 5 分鐘呼叫一次，`fetch_yearly_ohlcv` 會自動做增量更新。
+- 若偵測到買/賣訊號，`dispatch_signal` 會讀取 `config/.env` 的 `DISCORD_WEBHOOK` 並以 POST 通知。
+- 當前策略僅為快速示範，請持續追蹤績效並定期重新訓練。
+
+## 環境設定
+- 請複製 `config/.env.example` 為 `config/.env` 並填入 `DISCORD_WEBHOOK=<你的網址>`。
+- 未設定時，訊號仍會出現在應用程式日誌，但不會對外送出。
