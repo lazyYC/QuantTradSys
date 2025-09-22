@@ -8,6 +8,7 @@
 - ✅ 訊號產生管線（函數式組合，可整合 rule-based / ML 評分器）
 - ✅ 技術指標快速回測 + 即時訊號流程（基礎網格搜尋）
 - ✅ 策略參數儲存與通知流程雛型（SQLite / Discord Webhook）
+- ✅ 均值回歸策略示範（ATR/BB/Volume 指標組合）
 
 ## 資料抓取元件使用說明
 1. 安裝依賴：`pip install -r requirements.txt`
@@ -142,3 +143,9 @@ print(cycle_result['signal'])
 ## 環境設定
 - 請複製 `config/.env.example` 為 `config/.env` 並填入 `DISCORD_WEBHOOK=<你的網址>`。
 - 未設定時，訊號仍會出現在應用程式日誌，但不會對外送出。
+
+## 均值回歸策略示範
+- 模組：`strategies.mean_reversion`
+- 管線：`pipelines.mean_reversion.train_mean_reversion`
+- 指標：Bollinger Band Z-score、ATR 偏離、成交量 Z-score、三根 K 線形態
+- 流程：訓練階段使用網格搜尋選出最佳參數；即時階段套用已儲存參數並透過 Discord Webhook 發送訊號。
