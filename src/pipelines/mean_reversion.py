@@ -1,7 +1,7 @@
 ﻿import itertools
 import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
@@ -9,6 +9,7 @@ import pandas as pd
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from persistence.param_store import save_strategy_params
+from persistence.trade_store import save_trades
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.mean_reversion import (
     BacktestResult,
@@ -79,14 +80,14 @@ def split_train_test(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         return df, df
     end_time = df["timestamp"].iloc[-1]
     test_start = end_time - pd.DateOffset(months=1)
-    train_start = test_start - pd.DateOffset(months=12)
+    train_start = test_start - pd.DateOffset(months=11)
     train_df = df[(df["timestamp"] >= train_start) & (df["timestamp"] < test_start)].reset_index(drop=True)
     test_df = df[df["timestamp"] >= test_start].reset_index(drop=True)
     if train_df.empty or test_df.empty:
         split_idx = max(int(len(df) * 0.8), 1)
         train_df = df.iloc[:split_idx].reset_index(drop=True)
         test_df = df.iloc[split_idx:].reset_index(drop=True)
-        LOGGER.warning("Fallback split used due to insufficient 12+1 month history")
+        LOGGER.warning("Fallback split used due to insufficient 11+1 month history")
     return train_df, test_df
 
 
@@ -100,6 +101,7 @@ def train_mean_reversion(
     exchange_config: Optional[dict] = None,
     output_path: Optional[Path] = None,
     params_store_path: Optional[Path] = None,
+    trades_store_path: Optional[Path] = None,
 ) -> TrainTestResult:
     """抓取資料、執行網格搜尋，並回傳訓練與測試結果。"""
     raw_df = fetch_yearly_ohlcv(
@@ -124,6 +126,7 @@ def train_mean_reversion(
     train_result = backtest_mean_reversion(train_df, best_params)
     test_result = backtest_mean_reversion(test_df, best_params)
 
+    run_id = None
     if params_store_path is not None:
         save_strategy_params(
             params_store_path,
@@ -132,6 +135,28 @@ def train_mean_reversion(
             timeframe=timeframe,
             params=best_params.__dict__,
             metrics={k: float(v) for k, v in train_result.metrics.items()},
+        )
+        run_id = datetime.now(timezone.utc).isoformat()
+    if trades_store_path is not None:
+        run_id = save_trades(
+            trades_store_path,
+            strategy="mean_reversion",
+            dataset="train",
+            symbol=symbol,
+            timeframe=timeframe,
+            trades=train_result.trades,
+            metrics=train_result.metrics,
+            run_id=run_id,
+        )
+        save_trades(
+            trades_store_path,
+            strategy="mean_reversion",
+            dataset="test",
+            symbol=symbol,
+            timeframe=timeframe,
+            trades=test_result.trades,
+            metrics=test_result.metrics,
+            run_id=run_id,
         )
 
     return TrainTestResult(best_params=best_params, train=train_result, test=test_result, rankings=rankings)
@@ -143,3 +168,4 @@ __all__ = [
     "train_mean_reversion",
     "TrainTestResult",
 ]
+

@@ -1,0 +1,139 @@
+﻿import logging
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable, Mapping, Optional
+
+import pandas as pd
+
+LOGGER = logging.getLogger(__name__)
+
+TRADE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_trades (
+    run_id TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    dataset TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    entry_time TEXT NOT NULL,
+    exit_time TEXT NOT NULL,
+    side TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    exit_price REAL NOT NULL,
+    return REAL NOT NULL,
+    holding_mins REAL NOT NULL,
+    entry_zscore REAL NOT NULL,
+    exit_zscore REAL NOT NULL,
+    exit_reason TEXT NOT NULL,
+    PRIMARY KEY (run_id, dataset, entry_time, exit_time, symbol, timeframe)
+);
+"""
+
+
+METRIC_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS strategy_metrics (
+    run_id TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    dataset TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    annualized_return REAL,
+    total_return REAL,
+    sharpe REAL,
+    max_drawdown REAL,
+    win_rate REAL,
+    trades INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, strategy, dataset, symbol, timeframe)
+);
+"""
+
+
+def _ensure_connection(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    with conn:
+        conn.executescript(TRADE_SCHEMA_SQL)
+        conn.executescript(METRIC_SCHEMA_SQL)
+    return conn
+
+
+def save_trades(
+    db_path: Path,
+    *,
+    strategy: str,
+    dataset: str,
+    symbol: str,
+    timeframe: str,
+    trades: pd.DataFrame,
+    metrics: Mapping[str, float],
+    run_id: Optional[str] = None,
+) -> str:
+    """將交易紀錄與對應的 summary metrics 寫入 SQLite。"""
+    conn = _ensure_connection(db_path)
+    run_identifier = run_id or datetime.now(timezone.utc).isoformat()
+    with conn:
+        if not trades.empty:
+            records = [
+                (
+                    run_identifier,
+                    strategy,
+                    dataset,
+                    symbol,
+                    timeframe,
+                    str(row["entry_time"]),
+                    str(row["exit_time"]),
+                    str(row["side"]),
+                    float(row["entry_price"]),
+                    float(row["exit_price"]),
+                    float(row["return"]),
+                    float(row["holding_mins"]),
+                    float(row["entry_zscore"]),
+                    float(row["exit_zscore"]),
+                    str(row["exit_reason"]),
+                )
+                for _, row in trades.iterrows()
+            ]
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO strategy_trades (
+                    run_id, strategy, dataset, symbol, timeframe,
+                    entry_time, exit_time, side, entry_price, exit_price,
+                    return, holding_mins, entry_zscore, exit_zscore, exit_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                records,
+            )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO strategy_metrics (
+                run_id, strategy, dataset, symbol, timeframe,
+                annualized_return, total_return, sharpe, max_drawdown,
+                win_rate, trades, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_identifier,
+                strategy,
+                dataset,
+                symbol,
+                timeframe,
+                float(metrics.get("annualized_return", 0.0)),
+                float(metrics.get("total_return", 0.0)),
+                float(metrics.get("sharpe", 0.0)),
+                float(metrics.get("max_drawdown", 0.0)),
+                float(metrics.get("win_rate", 0.0)),
+                int(metrics.get("trades", 0)),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+    conn.close()
+    LOGGER.info(
+        "Stored %s trades for %s (%s) run=%s", len(trades), strategy, dataset, run_identifier
+    )
+    return run_identifier
+
+
+__all__ = ["save_trades"]
