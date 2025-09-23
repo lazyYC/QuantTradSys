@@ -1,8 +1,7 @@
 ﻿import itertools
 import logging
-import numpy as np
 from dataclasses import dataclass
-from datetime import timedelta, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
@@ -14,6 +13,7 @@ from persistence.trade_store import save_trades
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.mean_reversion import (
     BacktestResult,
+    MeanReversionFeatureCache,
     MeanReversionParams,
     backtest_mean_reversion,
     grid_search_mean_reversion,
@@ -39,16 +39,16 @@ class MeanReversionGrid:
 
 
 DEFAULT_GRID = MeanReversionGrid(
-    sma_windows=np.arange(20, 30, 3),
-    bb_stds=np.arange(1.5, 2.5, 0.2),
-    atr_windows=np.arange(14, 28, 4),
-    atr_mults=np.arange(0.5, 1.0, 0.1),
-    entry_zscores=np.arange(1.5, 2.0, 0.1),
-    volume_windows=np.arange(40, 80, 4),
-    volume_zscores=np.arange(0.5, 1.0, 0.1),
+    sma_windows=[20, 40],
+    bb_stds=[2.0, 2.5],
+    atr_windows=[14, 28],
+    atr_mults=[0.5, 1.0],
+    entry_zscores=[1.5, 2.0],
+    volume_windows=[40, 80],
+    volume_zscores=[0.5, 1.0],
     pattern_mins=[2, 3],
     stop_loss_mults=[1.5, 2.0],
-    exit_zscores=np.arange(0.3, 1.2, 0.1),
+    exit_zscores=[0.0, 0.5],
 )
 
 
@@ -92,12 +92,22 @@ def split_train_test(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train_df, test_df
 
 
+def _build_feature_cache(df: pd.DataFrame, grid: MeanReversionGrid) -> MeanReversionFeatureCache:
+    return MeanReversionFeatureCache(
+        df,
+        sma_windows=sorted(set(int(v) for v in grid.sma_windows)),
+        atr_windows=sorted(set(int(v) for v in grid.atr_windows)),
+        volume_windows=sorted(set(int(v) for v in grid.volume_windows)),
+        pattern_windows=sorted(set(int(v) for v in grid.pattern_mins)),
+    )
+
+
 def train_mean_reversion(
     symbol: str,
     *,
     timeframe: str = "5m",
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    grid: MeanReversionGrid = DEFAULT_GRID,
+    grid: Optional[MeanReversionGrid] = None,
     exchange_id: str = "binance",
     exchange_config: Optional[dict] = None,
     output_path: Optional[Path] = None,
@@ -118,14 +128,18 @@ def train_mean_reversion(
     if train_df.empty or test_df.empty:
         raise ValueError("Insufficient data after split; please extend lookback or verify data integrity")
 
-    rankings = grid_search_mean_reversion(train_df, iter_grid(grid))[:20]
+    grid = grid or DEFAULT_GRID
+    train_cache = _build_feature_cache(train_df, grid)
+    test_cache = _build_feature_cache(test_df, grid)
+
+    rankings = grid_search_mean_reversion(train_df, iter_grid(grid), feature_cache=train_cache)[:20]
     if not rankings:
         raise ValueError("Grid search produced no valid parameter sets")
     best = rankings[0]
     best_params: MeanReversionParams = best["params"]
 
-    train_result = backtest_mean_reversion(train_df, best_params)
-    test_result = backtest_mean_reversion(test_df, best_params)
+    train_result = backtest_mean_reversion(train_df, best_params, feature_cache=train_cache)
+    test_result = backtest_mean_reversion(test_df, best_params, feature_cache=test_cache)
 
     run_id = None
     if params_store_path is not None:
@@ -168,5 +182,6 @@ __all__ = [
     "DEFAULT_GRID",
     "train_mean_reversion",
     "TrainTestResult",
+    "split_train_test",
 ]
 
