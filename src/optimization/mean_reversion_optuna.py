@@ -6,6 +6,7 @@ from typing import Optional
 
 import optuna
 import pandas as pd
+import numpy as np
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from persistence.param_store import save_strategy_params
@@ -180,4 +181,8 @@ def optimize_mean_reversion(
 
 
 __all__ = ["OptimizationResult", "optimize_mean_reversion"]
+
+
+
+
 
