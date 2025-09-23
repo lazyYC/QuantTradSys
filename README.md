@@ -149,3 +149,11 @@ print(cycle_result['signal'])
 - 管線：`pipelines.mean_reversion.train_mean_reversion`
 - 指標：Bollinger Band Z-score、ATR 偏離、成交量 Z-score、三根 K 線形態
 - 流程：訓練階段使用網格搜尋選出最佳參數；即時階段套用已儲存參數並透過 Discord Webhook 發送訊號。
+## Optuna 參數優化
+```powershell
+$env:PYTHONPATH = "src"
+python -X utf8 pipeline_run_mean_rev.py
+```
+
+- 使用 Optuna TPE + Median Pruner 搜尋參數，結果與交易紀錄會寫入 `storage/strategy_state.db`。
+- 可透過 `optuna-dashboard` 或 SQL 查詢 `strategy_trades`、`strategy_metrics` 取得完整 Trail 與交易資訊。
