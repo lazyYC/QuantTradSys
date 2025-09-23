@@ -8,6 +8,7 @@ from typing import Iterable, List, Optional, Sequence
 import pandas as pd
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
+from utils.formatting import format_metrics
 from persistence.param_store import save_strategy_params
 from persistence.trade_store import save_trades
 from strategies.data_utils import prepare_ohlcv_frame
@@ -50,6 +51,7 @@ DEFAULT_GRID = MeanReversionGrid(
     stop_loss_mults=[1.5, 2.0],
     exit_zscores=[0.0, 0.5],
 )
+
 
 
 def iter_grid(grid: MeanReversionGrid) -> Iterable[MeanReversionParams]:
@@ -148,8 +150,8 @@ def train_mean_reversion(
             strategy="mean_reversion",
             symbol=symbol,
             timeframe=timeframe,
-            params=best_params.__dict__,
-            metrics={k: float(v) for k, v in train_result.metrics.items()},
+            params=best_params.as_dict(rounded=True),
+            metrics=format_metrics(train_result.metrics),
         )
         run_id = datetime.now(timezone.utc).isoformat()
     if trades_store_path is not None:
@@ -160,7 +162,7 @@ def train_mean_reversion(
             symbol=symbol,
             timeframe=timeframe,
             trades=train_result.trades,
-            metrics=train_result.metrics,
+            metrics=format_metrics(train_result.metrics),
             run_id=run_id,
         )
         save_trades(
@@ -170,7 +172,7 @@ def train_mean_reversion(
             symbol=symbol,
             timeframe=timeframe,
             trades=test_result.trades,
-            metrics=test_result.metrics,
+            metrics=format_metrics(test_result.metrics),
             run_id=run_id,
         )
 

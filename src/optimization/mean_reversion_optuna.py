@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
+from utils.formatting import format_metrics
 from persistence.param_store import save_strategy_params
 from persistence.trade_store import save_trades
 from pipelines.mean_reversion import MeanReversionGrid, TrainTestResult, split_train_test
@@ -28,6 +29,7 @@ PERIODS_PER_YEAR = int(365 * 24 * 60 / 5)
 class OptimizationResult:
     study: optuna.Study
     train_test: TrainTestResult
+
 
 
 def _build_cache(df: pd.DataFrame, grid: MeanReversionGrid) -> MeanReversionFeatureCache:
@@ -128,7 +130,7 @@ def optimize_mean_reversion(
 
     def objective(trial: optuna.Trial) -> float:
         params = _suggest_params(trial)
-        trial.set_user_attr("params", params.__dict__)
+        trial.set_user_attr("params", params.as_dict(rounded=True))
         result = backtest_mean_reversion(train_df, params, feature_cache=train_cache)
         equity_df = result.equity_curve
         _report_pruner(trial, equity_df)
@@ -151,8 +153,8 @@ def optimize_mean_reversion(
             strategy="mean_reversion_optuna",
             symbol=symbol,
             timeframe=timeframe,
-            params=best_params.__dict__,
-            metrics={k: float(v) for k, v in train_result.metrics.items()},
+            params=best_params.as_dict(rounded=True),
+            metrics=format_metrics(train_result.metrics),
         )
         run_id = datetime.now(timezone.utc).isoformat()
     if trades_store_path is not None:
@@ -163,7 +165,7 @@ def optimize_mean_reversion(
             symbol=symbol,
             timeframe=timeframe,
             trades=train_result.trades,
-            metrics=train_result.metrics,
+            metrics=format_metrics(train_result.metrics),
             run_id=run_id,
         )
         save_trades(
@@ -173,7 +175,7 @@ def optimize_mean_reversion(
             symbol=symbol,
             timeframe=timeframe,
             trades=test_result.trades,
-            metrics=test_result.metrics,
+            metrics=format_metrics(test_result.metrics),
             run_id=run_id,
         )
 

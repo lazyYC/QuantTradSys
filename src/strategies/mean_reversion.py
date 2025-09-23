@@ -1,13 +1,24 @@
 ﻿import logging
-from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, asdict
+from typing import Any, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
+from utils.formatting import format_params, round_numeric_fields
+
 LOGGER = logging.getLogger(__name__)
 
 PERIODS_PER_YEAR = int(365 * 24 * 60 / 5)
+
+CONTEXT_DECIMALS = {
+    "close": 2,
+    "atr": 3,
+    "zscore": 3,
+    "entry_price": 2,
+    "entry_zscore": 3,
+    "pnl_pct": 6,
+}
 
 
 @dataclass(frozen=True)
@@ -22,6 +33,73 @@ class MeanReversionParams:
     pattern_min: int
     stop_loss_mult: float
     exit_zscore: float
+
+
+    _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
+        "bb_std": 1,
+        "atr_mult": 1,
+        "entry_zscore": 1,
+        "volume_z": 1,
+        "stop_loss_mult": 1,
+        "exit_zscore": 1,
+    }
+
+    def as_dict(self, rounded: bool = False) -> dict:
+        data = asdict(self)
+        if not rounded:
+            return data
+        return format_params(data, decimals_map=self._ROUND_DECIMALS)
+
+    def __repr__(self) -> str:
+        ordered_keys = (
+            "sma_window",
+            "bb_std",
+            "atr_window",
+            "atr_mult",
+            "entry_zscore",
+            "volume_window",
+            "volume_z",
+            "pattern_min",
+            "stop_loss_mult",
+            "exit_zscore",
+        )
+        rounded = self.as_dict(rounded=True)
+        body = ', '.join(f"{key}={rounded[key]}" for key in ordered_keys)
+        return f"MeanReversionParams({body})"
+
+
+@dataclass(frozen=True)
+class MeanReversionRuntimeState:
+    position: int = 0
+    entry_price: float = 0.0
+    entry_time: Optional[pd.Timestamp] = None
+    entry_zscore: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "position": self.position,
+            "entry_price": self.entry_price,
+            "entry_time": self.entry_time.isoformat() if self.entry_time is not None else None,
+            "entry_zscore": self.entry_zscore,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[Mapping[str, Any]]) -> "MeanReversionRuntimeState":
+        if not data:
+            return cls()
+        entry_time = data.get("entry_time")
+        timestamp = pd.to_datetime(entry_time) if entry_time else None
+        if isinstance(timestamp, pd.Timestamp):
+            if pd.isna(timestamp):
+                timestamp = None
+            elif timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize("UTC")
+        return cls(
+            position=int(data.get("position", 0)),
+            entry_price=float(data.get("entry_price", 0.0)),
+            entry_time=timestamp,
+            entry_zscore=float(data.get("entry_zscore", 0.0)),
+        )
 
 
 @dataclass(frozen=True)
@@ -317,6 +395,88 @@ def backtest_mean_reversion(
     return BacktestResult(metrics, trades_df, equity_df, per_bar_series)
 
 
+def generate_realtime_decision(
+    df: pd.DataFrame,
+    params: MeanReversionParams,
+    *,
+    state: Optional[MeanReversionRuntimeState] = None,
+) -> tuple[str, dict, MeanReversionRuntimeState]:
+    """根據最新 K 線判斷即時訊號並回傳狀態。"""
+    runtime_state = state or MeanReversionRuntimeState()
+    features = compute_features(df, params)
+    if features.empty:
+        context = {
+            "reason": "insufficient_data",
+            "position_before": runtime_state.position,
+            "position_after": runtime_state.position,
+            "params": params.as_dict(rounded=True),
+        }
+        context = round_numeric_fields(context, decimals_map=CONTEXT_DECIMALS)
+        return "HOLD", context, runtime_state
+
+    latest = features.iloc[-1]
+    timestamp = latest["timestamp"]
+    close_price = float(latest["close"])
+    zscore = float(latest["zscore"])
+    atr_value = float(latest["atr"])
+
+    context = {
+        "timestamp": str(timestamp),
+        "close": close_price,
+        "zscore": zscore,
+        "atr": atr_value,
+        "position_before": runtime_state.position,
+        "params": params.as_dict(rounded=True),
+    }
+    action = "HOLD"
+    new_state = runtime_state
+
+    if runtime_state.position != 0:
+        exit_flag, exit_reason = _exit_conditions(
+            latest, params, runtime_state.position, runtime_state.entry_price
+        )
+        if exit_flag:
+            pnl_pct = 0.0
+            if runtime_state.entry_price:
+                pnl_pct = (close_price - runtime_state.entry_price) / runtime_state.entry_price
+                pnl_pct *= runtime_state.position
+            context.update(
+                {
+                    "reason": exit_reason,
+                    "entry_price": runtime_state.entry_price,
+                    "entry_time": runtime_state.entry_time.isoformat() if runtime_state.entry_time is not None else None,
+                    "pnl_pct": pnl_pct,
+                }
+            )
+            new_state = MeanReversionRuntimeState()
+            action = "EXIT_LONG" if runtime_state.position == 1 else "EXIT_SHORT"
+
+    if action == "HOLD" and runtime_state.position == 0:
+        long_cond, short_cond = _entry_conditions(latest, params)
+        if long_cond:
+            action = "ENTER_LONG"
+            new_state = MeanReversionRuntimeState(
+                position=1,
+                entry_price=close_price,
+                entry_time=timestamp,
+                entry_zscore=zscore,
+            )
+            context["entry_zscore"] = zscore
+        elif short_cond:
+            action = "ENTER_SHORT"
+            new_state = MeanReversionRuntimeState(
+                position=-1,
+                entry_price=close_price,
+                entry_time=timestamp,
+                entry_zscore=zscore,
+            )
+            context["entry_zscore"] = zscore
+
+    context["position_after"] = new_state.position
+    context = round_numeric_fields(context, decimals_map=CONTEXT_DECIMALS)
+    return action, context, new_state
+
+
 def grid_search_mean_reversion(
     df: pd.DataFrame,
     param_grid: Iterable[MeanReversionParams],
@@ -335,10 +495,12 @@ def grid_search_mean_reversion(
 
 __all__ = [
     "MeanReversionParams",
+    "MeanReversionRuntimeState",
     "BacktestResult",
     "MeanReversionFeatureCache",
     "compute_features",
     "backtest_mean_reversion",
+    "generate_realtime_decision",
     "grid_search_mean_reversion",
 ]
 
