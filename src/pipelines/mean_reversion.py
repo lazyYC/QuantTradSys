@@ -1,5 +1,6 @@
 ﻿import itertools
 import logging
+import numpy as np
 from dataclasses import dataclass
 from datetime import timedelta, datetime, timezone
 from pathlib import Path
@@ -38,16 +39,16 @@ class MeanReversionGrid:
 
 
 DEFAULT_GRID = MeanReversionGrid(
-    sma_windows=[20, 40],
-    bb_stds=[2.0, 2.5],
-    atr_windows=[14, 28],
-    atr_mults=[0.5, 1.0],
-    entry_zscores=[1.5, 2.0],
-    volume_windows=[40, 80],
-    volume_zscores=[0.5, 1.0],
+    sma_windows=np.arange(20, 30, 3),
+    bb_stds=np.arange(1.5, 2.5, 0.2),
+    atr_windows=np.arange(14, 28, 4),
+    atr_mults=np.arange(0.5, 1.0, 0.1),
+    entry_zscores=np.arange(1.5, 2.0, 0.1),
+    volume_windows=np.arange(40, 80, 4),
+    volume_zscores=np.arange(0.5, 1.0, 0.1),
     pattern_mins=[2, 3],
     stop_loss_mults=[1.5, 2.0],
-    exit_zscores=[0.0, 0.5],
+    exit_zscores=np.arange(0.3, 1.2, 0.1),
 )
 
 
