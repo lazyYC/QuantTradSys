@@ -1,6 +1,7 @@
 """啟動均值回歸策略的即時訊號排程。"""
 import argparse
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +10,22 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from pipelines.mean_reversion_realtime import run_realtime_cycle
 
 LOGGER = logging.getLogger(__name__)
+
+DEFAULT_LOG_PATH = Path("storage/logs/mean_reversion_scheduler.log")
+
+
+def _configure_logging(log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
 
 
 def main() -> None:
@@ -30,9 +47,15 @@ def main() -> None:
         default=Path("storage/strategy_state.db"),
         help="即時狀態儲存的 SQLite 路徑",
     )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=DEFAULT_LOG_PATH,
+        help="排程器寫入的日誌檔路徑",
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    _configure_logging(args.log_file)
 
     def job() -> None:
         try:
