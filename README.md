@@ -157,3 +157,7 @@ python -X utf8 pipeline_run_mean_rev.py
 
 - 使用 Optuna TPE + Median Pruner 搜尋參數，結果與交易紀錄會寫入 `storage/strategy_state.db`。
 - 可透過 `optuna-dashboard` 或 SQL 查詢 `strategy_trades`、`strategy_metrics` 取得完整 Trail 與交易資訊。
+## UI Dashboard
+- 啟動方式：`python scripts/run_ui_dashboard.py`，預設 http://127.0.0.1:7861。
+- 掛載 FastAPI `/api` 端點提供資料查詢，Gradio 首頁顯示 K 線圖及交易標記。
+- 詳細規劃請見 `docs/ui_dashboard.md`，未來可在此延伸逐筆交易視覺化。
