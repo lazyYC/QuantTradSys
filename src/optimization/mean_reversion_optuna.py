@@ -87,6 +87,7 @@ def optimize_mean_reversion(
     output_path: Optional[Path] = None,
     params_store_path: Optional[Path] = None,
     trades_store_path: Optional[Path] = None,
+    n_jobs: int = 1,
 ) -> OptimizationResult:
     sampler = sampler or optuna.samplers.TPESampler(multivariate=True, group=True)
     pruner = pruner or optuna.pruners.MedianPruner(n_startup_trials=20, n_warmup_steps=2)
@@ -137,7 +138,7 @@ def optimize_mean_reversion(
         score = result.metrics["annualized_return"] - 0.5 * result.metrics["max_drawdown"]
         return score
 
-    study.optimize(objective, n_trials=n_trials, timeout=timeout)
+    study.optimize(objective, n_trials=n_trials, timeout=timeout, n_jobs=n_jobs)
 
     best_params_dict = study.best_trial.user_attrs["params"]
     best_params = MeanReversionParams(**{k: int(v) if "window" in k or k == "pattern_min" or k == "atr_window" else float(v) for k, v in best_params_dict.items()})
