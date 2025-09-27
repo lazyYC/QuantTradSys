@@ -1,17 +1,23 @@
 ﻿import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import optuna
+from optuna.trial import TrialState
 import pandas as pd
 import numpy as np
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from utils.formatting import format_metrics
 from persistence.param_store import save_strategy_params
-from persistence.trade_store import save_trades
+from persistence.trade_store import (
+    prune_strategy_metrics,
+    prune_strategy_trades,
+    save_trades,
+)
 from pipelines.mean_reversion import MeanReversionGrid, TrainTestResult, split_train_test
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.mean_reversion import (
@@ -23,6 +29,38 @@ from strategies.mean_reversion import (
 LOGGER = logging.getLogger(__name__)
 
 PERIODS_PER_YEAR = int(365 * 24 * 60 / 5)
+
+RESULT_GUARD_DIR = Path("storage/optuna_result_flags")
+
+
+def _has_pending_trials(study: optuna.Study) -> bool:
+    try:
+        pending = study.get_trials(deepcopy=False, states=(TrialState.RUNNING, TrialState.WAITING))
+    except Exception:  # noqa: BLE001
+        return True
+    return bool(pending)
+
+
+def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
+    if not study_name:
+        return True
+    guard_dir.mkdir(parents=True, exist_ok=True)
+    guard_path = guard_dir / f"{study_name}.flag"
+    try:
+        fd = os.open(guard_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(datetime.now(timezone.utc).isoformat())
+    return True
+
+
+def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
+    if _has_pending_trials(study):
+        return False
+    if guard_dir is None:
+        return True
+    return _acquire_result_guard(study.study_name, guard_dir)
 
 
 @dataclass
@@ -147,6 +185,11 @@ def optimize_mean_reversion(
     test_result = backtest_mean_reversion(test_df, best_params, feature_cache=test_cache)
     train_test = TrainTestResult(best_params=best_params, train=train_result, test=test_result, rankings=[])
 
+    should_persist = _should_persist_results(study, result_guard_dir)
+    if not should_persist:
+        LOGGER.info("Skip persisting results for study %s due to guard or pending trials", study.study_name)
+        return OptimizationResult(study=study, train_test=train_test)
+
     run_id = None
     if params_store_path is not None:
         save_strategy_params(
@@ -178,6 +221,20 @@ def optimize_mean_reversion(
             trades=test_result.trades,
             metrics=format_metrics(test_result.metrics),
             run_id=run_id,
+        )
+        prune_strategy_trades(
+            trades_store_path,
+            strategy="mean_reversion_optuna",
+            symbol=symbol,
+            timeframe=timeframe,
+            keep_run_id=run_id,
+        )
+        prune_strategy_metrics(
+            trades_store_path,
+            strategy="mean_reversion_optuna",
+            symbol=symbol,
+            timeframe=timeframe,
+            keep_run_id=run_id,
         )
 
     return OptimizationResult(study=study, train_test=train_test)

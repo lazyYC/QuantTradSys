@@ -136,4 +136,55 @@ def save_trades(
     return run_identifier
 
 
-__all__ = ["save_trades"]
+def prune_strategy_trades(
+    db_path: Path,
+    *,
+    strategy: str,
+    symbol: str,
+    timeframe: str,
+    keep_run_id: str,
+) -> int:
+    """刪除舊 run 的交易紀錄，只保留指定 run_id。"""
+    conn = _ensure_connection(db_path)
+    with conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM strategy_trades
+            WHERE strategy = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
+            """,
+            (strategy, symbol, timeframe, keep_run_id),
+        )
+    conn.close()
+    removed = cursor.rowcount or 0
+    if removed:
+        LOGGER.info("Pruned %s trades for %s | %s", removed, strategy, timeframe)
+    return removed
+
+
+
+def prune_strategy_metrics(
+    db_path: Path,
+    *,
+    strategy: str,
+    symbol: str,
+    timeframe: str,
+    keep_run_id: str,
+) -> int:
+    """刪除舊 run 的績效紀錄，只保留指定 run_id。"""
+    conn = _ensure_connection(db_path)
+    with conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM strategy_metrics
+            WHERE strategy = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
+            """,
+            (strategy, symbol, timeframe, keep_run_id),
+        )
+    conn.close()
+    removed = cursor.rowcount or 0
+    if removed:
+        LOGGER.info("Pruned %s metrics rows for %s | %s", removed, strategy, timeframe)
+    return removed
+
+
+__all__ = ["save_trades", "prune_strategy_trades", "prune_strategy_metrics"]
