@@ -15,7 +15,6 @@ from strategies.mean_reversion import (
 
 LOGGER = logging.getLogger(__name__)
 
-STRATEGY_KEY = "mean_reversion_optuna"
 DEFAULT_STATE_DB = Path("storage/strategy_state.db")
 
 
@@ -32,6 +31,7 @@ def _load_params(record: StrategyRecord | None) -> Optional[MeanReversionParams]
 def run_realtime_cycle(
     symbol: str,
     *,
+    strategy: str = "mean_reversion_optuna",
     timeframe: str = "5m",
     lookback_days: int = 400,
     params_store_path: Path = DEFAULT_STATE_DB,
@@ -42,7 +42,7 @@ def run_realtime_cycle(
     """抓取最新資料、計算訊號並視需要派送通知。"""
     param_record = load_strategy_params(
         params_store_path,
-        strategy=STRATEGY_KEY,
+        strategy=strategy,
         symbol=symbol,
         timeframe=timeframe,
     )
@@ -65,14 +65,14 @@ def run_realtime_cycle(
 
     runtime_record = load_runtime_state(
         state_store_path,
-        strategy=STRATEGY_KEY,
+        strategy=strategy,
         symbol=symbol,
         timeframe=timeframe,
     )
     runtime_state = MeanReversionRuntimeState.from_dict(runtime_record.state if runtime_record else None)
 
     action, context, new_state = generate_realtime_decision(cleaned, params, state=runtime_state)
-    context.update({"strategy": STRATEGY_KEY, "symbol": symbol, "timeframe": timeframe})
+    context.update({"strategy": strategy, "symbol": symbol, "timeframe": timeframe})
     LOGGER.info("Realtime action=%s context=%s", action, context)
 
     if action != "HOLD":
@@ -81,7 +81,7 @@ def run_realtime_cycle(
     if new_state != runtime_state:
         save_runtime_state(
             state_store_path,
-            strategy=STRATEGY_KEY,
+            strategy=strategy,
             symbol=symbol,
             timeframe=timeframe,
             state=new_state.to_dict(),
@@ -90,4 +90,4 @@ def run_realtime_cycle(
     return {"action": action, "context": context, "state": new_state.to_dict()}
 
 
-__all__ = ["run_realtime_cycle", "STRATEGY_KEY", "DEFAULT_STATE_DB"]
+__all__ = ["run_realtime_cycle", "DEFAULT_STATE_DB"]

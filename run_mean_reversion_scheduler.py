@@ -1,9 +1,13 @@
 """啟動均值回歸策略的即時訊號排程。"""
 import argparse
 import logging
+import os
+import sqlite3
+import sys
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Dict, List
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -28,10 +32,86 @@ def _configure_logging(log_path: Path) -> None:
     root.addHandler(console_handler)
 
 
+def _load_strategy_candidates(params_db: Path) -> List[Dict[str, str]]:
+    conn = sqlite3.connect(params_db)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT strategy, symbol, timeframe, updated_at
+        FROM strategy_params
+        ORDER BY updated_at DESC
+        """
+    ).fetchall()
+    conn.close()
+    if not rows:
+        raise RuntimeError("策略資料庫內沒有任何參數紀錄，請先完成一次訓練流程。")
+    return [dict(row) for row in rows]
+
+
+def _render_option(option: Dict[str, str]) -> str:
+    updated = option.get("updated_at") or ""
+    return f"{option['strategy']} | {option['symbol']} | {option['timeframe']} | {updated}".strip()
+
+
+def _select_with_arrows(options: List[Dict[str, str]]) -> Dict[str, str]:
+    try:
+        import msvcrt  # type: ignore
+    except ImportError as exc:  # pragma: no cover - Windows only
+        raise RuntimeError("目前環境無法使用方向鍵選單") from exc
+    if not sys.stdout.isatty():
+        raise RuntimeError("目前輸出非互動式終端，無法使用方向鍵選單")
+
+    index = 0
+    while True:
+        os.system("cls")
+        print("請使用上下鍵選擇要使用的策略，Enter 確認，Esc 取消：\n")
+        for i, opt in enumerate(options):
+            prefix = ">" if i == index else " "
+            print(f"{prefix} {_render_option(opt)}")
+        key = msvcrt.getwch()
+        if key in ("\r", "\n"):
+            return options[index]
+        if key == "\x1b":  # ESC
+            raise KeyboardInterrupt
+        if key in (chr(0), "\xe0"):
+            second = msvcrt.getwch()
+            if second == "H":  # Up
+                index = (index - 1) % len(options)
+            elif second == "P":  # Down
+                index = (index + 1) % len(options)
+
+
+
+
+def _select_with_numbers(options: List[Dict[str, str]]) -> Dict[str, str]:
+    print("請輸入數字選擇要使用的策略：")
+    for idx, opt in enumerate(options, start=1):
+        print(f"  {idx}. {_render_option(opt)}")
+    while True:
+        choice = input("輸入序號：").strip()
+        if not choice.isdigit():
+            print("請輸入有效的數字。")
+            continue
+        idx = int(choice)
+        if 1 <= idx <= len(options):
+            return options[idx - 1]
+        print("序號超出範圍，請重新輸入。")
+
+
+def _choose_strategy(options: List[Dict[str, str]]) -> Dict[str, str]:
+    if len(options) == 1:
+        return options[0]
+    try:
+        return _select_with_arrows(options)
+    except (RuntimeError, KeyboardInterrupt):
+        return _select_with_numbers(options)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mean reversion signal scheduler")
-    parser.add_argument("--symbol", default="BTC/USDT", help="交易對，例如 BTC/USDT")
-    parser.add_argument("--timeframe", default="5m", help="K 線時間週期")
+    parser.add_argument("--strategy", help="策略名稱，若不指定則提供選單")
+    parser.add_argument("--symbol", help="交易對，預設使用策略紀錄中的值")
+    parser.add_argument("--timeframe", help="K 線時間週期，預設使用策略紀錄中的值")
     parser.add_argument("--lookback-days", type=int, default=400, help="回補資料使用的天數")
     parser.add_argument("--interval-minutes", type=int, default=5, help="排程間隔分鐘數")
     parser.add_argument("--exchange", default="binance", help="CCXT 交易所 ID")
@@ -57,11 +137,46 @@ def main() -> None:
 
     _configure_logging(args.log_file)
 
+    candidates = _load_strategy_candidates(args.params_db)
+    chosen: Dict[str, str] | None = None
+
+    if args.strategy:
+        matches = [c for c in candidates if c["strategy"] == args.strategy]
+        if args.symbol:
+            matches = [c for c in matches if c["symbol"] == args.symbol]
+        if args.timeframe:
+            matches = [c for c in matches if c["timeframe"] == args.timeframe]
+        if matches:
+            chosen = matches[0]
+        else:
+            LOGGER.warning(
+                "找不到符合的策略紀錄 (strategy=%s symbol=%s timeframe=%s)，將進入選單。",
+                args.strategy,
+                args.symbol,
+                args.timeframe,
+            )
+
+    if chosen is None:
+        chosen = _choose_strategy(candidates)
+
+    strategy_key = chosen["strategy"]
+    symbol = args.symbol or chosen["symbol"]
+    timeframe = args.timeframe or chosen["timeframe"]
+
+    LOGGER.info(
+        "Scheduler 使用策略：%s | %s | %s (updated_at=%s)",
+        strategy_key,
+        symbol,
+        timeframe,
+        chosen.get("updated_at"),
+    )
+
     def job() -> None:
         try:
             run_realtime_cycle(
-                args.symbol,
-                timeframe=args.timeframe,
+                symbol,
+                strategy=strategy_key,
+                timeframe=timeframe,
                 lookback_days=args.lookback_days,
                 params_store_path=args.params_db,
                 state_store_path=args.state_db,
@@ -73,9 +188,10 @@ def main() -> None:
     scheduler = BlockingScheduler(timezone="UTC")
     scheduler.add_job(job, "interval", minutes=args.interval_minutes, next_run_time=datetime.now(timezone.utc))
     LOGGER.info(
-        "Mean reversion scheduler started | symbol=%s timeframe=%s interval=%s min",
-        args.symbol,
-        args.timeframe,
+        "Mean reversion scheduler started | strategy=%s symbol=%s timeframe=%s interval=%s min",
+        strategy_key,
+        symbol,
+        timeframe,
         args.interval_minutes,
     )
     try:

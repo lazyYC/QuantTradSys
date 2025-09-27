@@ -126,6 +126,7 @@ def optimize_mean_reversion(
     params_store_path: Optional[Path] = None,
     trades_store_path: Optional[Path] = None,
     n_jobs: int = 1,
+    result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
 ) -> OptimizationResult:
     sampler = sampler or optuna.samplers.TPESampler(multivariate=True, group=True)
     pruner = pruner or optuna.pruners.MedianPruner(n_startup_trials=20, n_warmup_steps=2)
