@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 $env:PYTHONPATH = 'src'
 
 $baseArgs = @(
-    "pipeline_run_mean_rev.py",
+    "scripts/pipeline_run_mean_rev.py",
     "--symbol", "BTC/USDT",
     "--timeframe", "5m",
     "--lookback-days", "400",

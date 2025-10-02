@@ -56,7 +56,7 @@ def _format_series_for_table(series: pd.Series, *, decimals: int = 4) -> tuple[S
 
 
 def _table_layout_settings(row_count: int, *, title_present: bool, min_height: int = 180, max_height: int | None = None) -> dict[str, object]:
-    """è¨ç®è¡¨æ ¼é©åçé«åº¦èéè·ã"""
+    """計算表格適合的高度與邊距。"""
     effective_rows = max(row_count, 1)
     base = 48 if title_present else 32
     height = base + 28 * effective_rows
@@ -66,9 +66,8 @@ def _table_layout_settings(row_count: int, *, title_present: bool, min_height: i
     top_margin = 40 if title_present else 16
     return {"height": height, "margin": dict(t=top_margin, b=16, l=20, r=20)}
 
-
 def create_metrics_table(metrics_df: pd.DataFrame, *, title: str | None = None) -> Optional[go.Figure]:
-    """å°ç©æææ¨è½çº Plotly è¡¨æ ¼ã"""
+    """將績效指標轉為 Plotly 表格。"""
     if metrics_df is None or metrics_df.empty:
         return None
     display_cols = [
@@ -98,10 +97,8 @@ def create_metrics_table(metrics_df: pd.DataFrame, *, title: str | None = None) 
     fig.update_layout(title=title, template="plotly_white", **layout_kwargs)
     return fig
 
-
-
 def create_params_table(params: Mapping[str, object] | None, *, title: str | None = None) -> Optional[go.Figure]:
-    """å°ç­ç¥åæ¸ä»¥è¡¨æ ¼åç¾ã"""
+    """將策略參數以表格呈現。"""
     if not params:
         return None
     series = pd.Series(params)
@@ -115,10 +112,8 @@ def create_params_table(params: Mapping[str, object] | None, *, title: str | Non
     fig.update_layout(title=title, template="plotly_white", **layout_kwargs)
     return fig
 
-
-
 def create_trade_distribution_table(trades: pd.DataFrame, *, title: str | None = None) -> Optional[go.Figure]:
-    """è¨ç®äº¤æå ±é¬èæææéçæè¦çµ±è¨ã"""
+    """計算交易報酬與持有時間的摘要統計。"""
     if trades is None or trades.empty:
         return None
     closed = trades.dropna(subset=["exit_time"]).copy()
@@ -151,10 +146,8 @@ def create_trade_distribution_table(trades: pd.DataFrame, *, title: str | None =
     fig.update_layout(title=title, template="plotly_white", **layout_kwargs)
     return fig
 
-
-
 def create_top_trades_table(trades: pd.DataFrame, *, top_n: int | None = None, title: str | None = None) -> Optional[go.Figure]:
-    """ååºå N ç­äº¤æçµæã"""
+    """列出前 N 筆交易結果。"""
     if trades is None or trades.empty:
         return None
     closed = trades.dropna(subset=["exit_time"]).copy()
@@ -164,10 +157,10 @@ def create_top_trades_table(trades: pd.DataFrame, *, top_n: int | None = None, t
     if top_n is not None:
         closed = closed.head(top_n)
     closed["return"] = closed["return"].map(lambda v: f"{v:.4f}" if pd.notna(v) else "-")
-    closed['entry_time'] = pd.to_datetime(closed['entry_time'], utc=True, errors='coerce')
-    closed['exit_time'] = pd.to_datetime(closed['exit_time'], utc=True, errors='coerce')
-    closed['entry_time'] = closed['entry_time'].dt.strftime('%Y-%m-%d %H:%M')
-    closed['exit_time'] = closed['exit_time'].dt.strftime('%Y-%m-%d %H:%M')
+    closed["entry_time"] = pd.to_datetime(closed["entry_time"], utc=True, errors="coerce")
+    closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True, errors="coerce")
+    closed["entry_time"] = closed["entry_time"].dt.strftime('%Y-%m-%d %H:%M')
+    closed["exit_time"] = closed["exit_time"].dt.strftime('%Y-%m-%d %H:%M')
     columns = ["entry_time", "exit_time", "side", "return", "holding_mins", "exit_reason"]
     available_cols = [col for col in columns if col in closed.columns]
     header = [
@@ -184,10 +177,3 @@ def create_top_trades_table(trades: pd.DataFrame, *, top_n: int | None = None, t
     fig.update_layout(title=title, template="plotly_white", **layout_kwargs)
     return fig
 
-__all__ = [
-    "rankings_to_dataframe",
-    "create_params_table",
-    "create_metrics_table",
-    "create_trade_distribution_table",
-    "create_top_trades_table",
-]
