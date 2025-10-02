@@ -1,10 +1,10 @@
-﻿"""提供 Plotly 圖表產生函式。"""
+﻿"""報表使用的 Plotly 圖表工具。"""
 from __future__ import annotations
 
 from typing import Optional
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -37,7 +37,7 @@ def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, co
                     line=dict(width=1, color="#1f2937"),
                 ),
                 hovertemplate=(
-                    "Entry %{text}<br>Price=%{y:.2f}<br>Time=%{x|%Y-%m-%d %H:%M}"  # noqa: E501
+                    "Entry %{text}<br>Price=%{y:.2f}<br>Time=%{x|%Y-%m-%d %H:%M}"
                 ),
                 text=entries["side"],
             ),
@@ -53,7 +53,7 @@ def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, co
                 name="Exit",
                 marker=dict(symbol="x", size=9, color=COLOR_EXIT, line=dict(width=1, color="#1f2937")),
                 hovertemplate=(
-                    "Exit (%{text})<br>Price=%{y:.2f}<br>Time=%{x|%Y-%m-%d %H:%M}"  # noqa: E501
+                    "Exit (%{text})<br>Price=%{y:.2f}<br>Time=%{x|%Y-%m-%d %H:%M}"
                 ),
                 text=exits["exit_reason"].fillna("exit"),
             ),
@@ -97,74 +97,9 @@ def build_candlestick_figure(
     return fig
 
 
-def prepare_metrics_table(metrics: pd.DataFrame) -> pd.DataFrame:
-    """整理績效指標供 UI 顯示。"""
-
-    if metrics.empty:
-        return metrics
-    display = metrics.copy()
-    numeric_cols = [
-        "annualized_return",
-        "total_return",
-        "sharpe",
-        "max_drawdown",
-        "win_rate",
-    ]
-    for col in numeric_cols:
-        if col in display.columns:
-            display[col] = display[col].map(lambda x: round(x, 4) if pd.notna(x) else x)
-    display["created_at"] = display["created_at"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M")
-    return display
-
-
-def prepare_trades_table(trades: pd.DataFrame) -> pd.DataFrame:
-    """轉換交易資料供 UI 顯示。"""
-
-    if trades.empty:
-        return trades
-    table = trades.copy()
-    table["entry_time"] = table["entry_time"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M")
-    table["exit_time"] = table["exit_time"].dt.tz_convert("UTC").dt.strftime("%Y-%m-%d %H:%M")
-    table["return"] = table["return"].map(lambda x: round(x, 6) if pd.notna(x) else x)
-    table["holding_mins"] = table["holding_mins"].map(lambda x: round(x, 1) if pd.notna(x) else x)
-    return table
-
-
-def placeholder_trade_bar_chart(trades: pd.DataFrame) -> Optional[go.Figure]:
-    """未來用於逐筆報酬條圖的預留函式。"""
-
-    if trades.empty:
-        return None
-    fig = go.Figure()
-    fig.add_trace(
-        go.Bar(
-            x=trades["return"],
-            y=trades.index.astype(str),
-            orientation="h",
-            marker_color=[COLOR_LONG if r >= 0 else COLOR_SHORT for r in trades["return"]],
-        )
-    )
-    fig.update_layout(
-        title="Trade Return Distribution",
-        xaxis_title="Return",
-        yaxis_title="Trade",
-        template="plotly_white",
-    )
-    return fig
-
-
-__all__ = [
-    "build_candlestick_figure",
-    "prepare_metrics_table",
-    "prepare_trades_table",
-    "placeholder_trade_bar_chart",
-    "build_trade_overview_figure",
-]
-
-
-
 def _estimate_bar_width(trades: pd.DataFrame, candles: pd.DataFrame) -> float:
-    """計算 bar 的預設寬度（毫秒），避免零寬度造成繪圖異常。"""
+    """計算交易報酬條圖的預設寬度（毫秒）。"""
+
     if trades is not None and not trades.empty:
         durations = trades["exit_time"] - trades["entry_time"]
         durations = durations.dropna()
@@ -179,7 +114,6 @@ def _estimate_bar_width(trades: pd.DataFrame, candles: pd.DataFrame) -> float:
     return 60_000.0
 
 
-
 def build_trade_overview_figure(
     candles: pd.DataFrame,
     trades: pd.DataFrame,
@@ -188,7 +122,8 @@ def build_trade_overview_figure(
     title: str | None = None,
     show_markers: bool = True,
 ) -> go.Figure:
-    """建立上方 K 線、下方交易報酬條的互動圖。"""
+    """建立價格、資金曲線與單筆報酬圖。"""
+
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -211,44 +146,44 @@ def build_trade_overview_figure(
         col=1,
     )
     if equity is not None and not equity.empty:
-        equity_sorted = equity.sort_values('timestamp')
+        equity_sorted = equity.sort_values("timestamp")
         fig.add_trace(
             go.Scatter(
-                x=equity_sorted['timestamp'],
-                y=equity_sorted['equity'],
-                name='Equity',
-                mode='lines',
-                line=dict(color='#0ea5e9', width=2),
+                x=equity_sorted["timestamp"],
+                y=equity_sorted["equity"],
+                name="Equity",
+                mode="lines",
+                line=dict(color="#0ea5e9", width=2),
             ),
             row=1,
             col=1,
             secondary_y=True,
         )
     if trades is not None and not trades.empty:
-        closed = trades.dropna(subset=['exit_time']).copy()
+        closed = trades.dropna(subset=["exit_time"]).copy()
         if not closed.empty:
-            closed['entry_time'] = pd.to_datetime(closed['entry_time'], utc=True, errors='coerce')
-            closed['exit_time'] = pd.to_datetime(closed['exit_time'], utc=True, errors='coerce')
+            closed["entry_time"] = pd.to_datetime(closed["entry_time"], utc=True, errors="coerce")
+            closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True, errors="coerce")
             if show_markers:
                 _add_trade_markers(fig, closed, row=1, col=1)
             width_default = _estimate_bar_width(closed, candles)
-            bar_centers = closed['exit_time'].fillna(closed['entry_time'])
-            returns = closed['return'].fillna(0.0)
-            widths = closed.get('bar_width_ms')
+            bar_centers = closed["exit_time"].fillna(closed["entry_time"])
+            returns = closed["return"].fillna(0.0)
+            widths = closed.get("bar_width_ms")
             if widths is not None:
                 widths = widths.fillna(width_default)
                 widths = widths.where(widths > 0, width_default)
             else:
                 widths = pd.Series(width_default, index=returns.index)
-            custom_entry = closed['entry_time'].dt.strftime('%Y-%m-%d %H:%M')
-            custom_side = closed.get('side', pd.Series('-', index=closed.index)).astype(str)
+            custom_entry = closed["entry_time"].dt.strftime("%Y-%m-%d %H:%M")
+            custom_side = closed.get("side", pd.Series('-', index=closed.index)).astype(str)
             fig.add_trace(
                 go.Bar(
                     x=bar_centers,
                     y=returns,
                     width=widths,
-                    marker=dict(color=np.where(returns >= 0, '#16a34a', '#dc2626'), line=dict(width=0)),
-                    name='Trade Return',
+                    marker=dict(color=np.where(returns >= 0, COLOR_LONG, COLOR_SHORT), line=dict(width=0)),
+                    name="Trade Return",
                     hovertemplate='Entry=%{customdata[0]}<br>Side=%{customdata[1]}<br>Exit=%{x|%Y-%m-%d %H:%M}<br>Return=%{y:.4f}',
                     customdata=np.column_stack((custom_entry, custom_side)),
                     offsetgroup='trade_returns',
@@ -262,7 +197,17 @@ def build_trade_overview_figure(
         template="plotly_white",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         barmode="overlay",
-        modebar_add=["zoom2d", "zoomIn2d", "zoomOut2d", "autoScale2d", "resetScale2d", "zoomX", "zoomOutX", "zoomY", "zoomOutY"],
+        modebar_add=[
+            "zoom2d",
+            "zoomIn2d",
+            "zoomOut2d",
+            "autoScale2d",
+            "resetScale2d",
+            "zoomX",
+            "zoomOutX",
+            "zoomY",
+            "zoomOutY",
+        ],
         margin=dict(t=60, b=60, l=60, r=60),
         xaxis=dict(rangeslider=dict(visible=True, thickness=0.12, bgcolor="#f8fafc")),
     )
@@ -271,3 +216,9 @@ def build_trade_overview_figure(
     fig.update_yaxes(domain=[0, 0.28], title_text="Return", row=2, col=1, fixedrange=False)
     fig.update_xaxes(title_text="Time", row=2, col=1)
     return fig
+
+
+__all__ = [
+    "build_candlestick_figure",
+    "build_trade_overview_figure",
+]

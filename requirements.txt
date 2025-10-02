@@ -10,9 +10,4 @@ scipy
 matplotlib
 seaborn
 plotly
-fastapi
-gradio
-uvicorn[standard]
-jinja2
-aiofiles
 optuna

@@ -26,7 +26,7 @@ from reporting.mean_reversion_report import (
     rankings_to_dataframe,
 )
 from persistence.trade_store import load_metrics, load_trades
-from ui.plotting import build_candlestick_figure, build_trade_overview_figure
+from reporting.plotting import build_candlestick_figure, build_trade_overview_figure
 from persistence.param_store import load_strategy_params
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.mean_reversion import MeanReversionParams, backtest_mean_reversion
