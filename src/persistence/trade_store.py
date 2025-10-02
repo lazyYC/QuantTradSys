@@ -2,11 +2,95 @@
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _query_dataframe(conn: sqlite3.Connection, query: str, params: Sequence[object]) -> pd.DataFrame:
+    """以 pandas 讀取查詢結果並轉換時間欄位。"""
+    df = pd.read_sql_query(query, conn, params=params)
+    time_cols = [col for col in df.columns if col.endswith('_time') or col.endswith('_at')]
+    for col in time_cols:
+        df[col] = pd.to_datetime(df[col], utc=True, errors='coerce')
+    return df
+
+
+
+def load_trades(
+    db_path: Path,
+    *,
+    strategy: str,
+    dataset: Optional[str] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> pd.DataFrame:
+    """讀取指定條件的交易紀錄。"""
+    conn = _ensure_connection(db_path)
+    filters = ['strategy = ?']
+    params: list[object] = [strategy]
+    if dataset:
+        filters.append('dataset = ?')
+        params.append(dataset)
+    if symbol:
+        filters.append('symbol = ?')
+        params.append(symbol)
+    if timeframe:
+        filters.append('timeframe = ?')
+        params.append(timeframe)
+    if run_id:
+        filters.append('run_id = ?')
+        params.append(run_id)
+    where_clause = ' AND '.join(filters)
+    query = f"""
+        SELECT *
+        FROM strategy_trades
+        WHERE {where_clause}
+        ORDER BY entry_time
+    """
+    df = _query_dataframe(conn, query, params)
+    conn.close()
+    return df
+
+
+def load_metrics(
+    db_path: Path,
+    *,
+    strategy: str,
+    dataset: Optional[str] = None,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
+    run_id: Optional[str] = None,
+) -> pd.DataFrame:
+    """讀取策略績效摘要供報表使用。"""
+    conn = _ensure_connection(db_path)
+    filters = ['strategy = ?']
+    params: list[object] = [strategy]
+    if dataset:
+        filters.append('dataset = ?')
+        params.append(dataset)
+    if symbol:
+        filters.append('symbol = ?')
+        params.append(symbol)
+    if timeframe:
+        filters.append('timeframe = ?')
+        params.append(timeframe)
+    if run_id:
+        filters.append('run_id = ?')
+        params.append(run_id)
+    where_clause = ' AND '.join(filters)
+    query = f"""
+        SELECT *
+        FROM strategy_metrics
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+    """
+    df = _query_dataframe(conn, query, params)
+    conn.close()
+    return df
 
 TRADE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS strategy_trades (
@@ -187,4 +271,4 @@ def prune_strategy_metrics(
     return removed
 
 
-__all__ = ["save_trades", "prune_strategy_trades", "prune_strategy_metrics"]
+__all__ = ["save_trades", "load_trades", "load_metrics", "prune_strategy_trades", "prune_strategy_metrics"]

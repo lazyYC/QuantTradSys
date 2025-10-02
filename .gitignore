@@ -82,4 +82,5 @@ Thumbs.db
 /storage/
 /data/
 config/.env
+/reports/
 
