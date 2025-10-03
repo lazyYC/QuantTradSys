@@ -58,7 +58,7 @@ def _format_series_for_table(series: pd.Series, *, decimals: int = 4) -> tuple[S
 def _table_layout_settings(row_count: int, *, title_present: bool, min_height: int = 180, max_height: int | None = None) -> dict[str, object]:
     """計算表格適合的高度與邊距。"""
     effective_rows = max(row_count, 1)
-    base = 48 if title_present else 32
+    base = 76 if title_present else 68
     height = base + 28 * effective_rows
     if max_height is not None:
         height = min(height, max_height)
