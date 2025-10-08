@@ -11,3 +11,4 @@ matplotlib
 seaborn
 plotly
 optuna
+lightgbm

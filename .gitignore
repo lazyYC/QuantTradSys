@@ -83,4 +83,5 @@ Thumbs.db
 /data/
 config/.env
 /reports/
+/.gemini/
 
