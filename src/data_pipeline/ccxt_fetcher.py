@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS ohlcv (
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     ts INTEGER NOT NULL,
+    iso_ts TEXT NOT NULL,
     open REAL NOT NULL,
     high REAL NOT NULL,
     low REAL NOT NULL,
@@ -123,7 +124,30 @@ def ensure_database(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     with conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_iso_column(conn)
     return conn
+
+
+def _ensure_iso_column(conn: sqlite3.Connection) -> None:
+    """確保 ohlcv 表具備 ISO8601 欄位並填補缺漏資料。"""
+    cursor = conn.execute("PRAGMA table_info(ohlcv)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "iso_ts" not in columns:
+        conn.execute("ALTER TABLE ohlcv ADD COLUMN iso_ts TEXT")
+    cursor = conn.execute(
+        "SELECT symbol, timeframe, ts FROM ohlcv WHERE iso_ts IS NULL OR iso_ts = ''"
+    )
+    pending = cursor.fetchall()
+    if not pending:
+        return
+    updates = []
+    for symbol, timeframe, ts in pending:
+        iso_ts = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        updates.append((iso_ts, symbol, timeframe, ts))
+    conn.executemany(
+        "UPDATE ohlcv SET iso_ts = ? WHERE symbol = ? AND timeframe = ? AND ts = ?",
+        updates,
+    )
 
 
 def latest_timestamp(conn: sqlite3.Connection, symbol: str, timeframe: str) -> Optional[int]:
@@ -145,25 +169,37 @@ def upsert_ohlcv_rows(
     """將新抓取的 OHLCV 行寫入資料庫。"""
     if not rows:
         return 0
-    records = [
-        (
-            symbol,
-            timeframe,
-            int(row[0]),
-            float(row[1]),
-            float(row[2]),
-            float(row[3]),
-            float(row[4]),
-            float(row[5]),
+    records: List[tuple] = []
+    for row in rows:
+        if len(row) >= 7:
+            ts_ms = int(row[0])
+            iso_ts = str(row[1]) or datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            open_, high, low, close, volume = row[2:7]
+        elif len(row) == 6:
+            ts_ms = int(row[0])
+            iso_ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            open_, high, low, close, volume = row[1:6]
+        else:
+            raise ValueError("Unexpected OHLCV row format; cannot upsert")
+        records.append(
+            (
+                symbol,
+                timeframe,
+                ts_ms,
+                iso_ts,
+                float(open_),
+                float(high),
+                float(low),
+                float(close),
+                float(volume),
+            )
         )
-        for row in rows
-    ]
     with conn:
         conn.executemany(
             """
             INSERT OR IGNORE INTO ohlcv (
-                symbol, timeframe, ts, open, high, low, close, volume
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                symbol, timeframe, ts, iso_ts, open, high, low, close, volume
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             records,
         )
@@ -211,7 +247,7 @@ def fetch_yearly_ohlcv(
     output_path: Optional[Path] = None,
     lookback_days: int = 365,
     db_path: Optional[Path] = Path("storage/market_data.db"),
-    prune_history: bool = True,
+    prune_history: bool = False,
 ) -> pd.DataFrame:
     """抓取約一年的 OHLCV 資料，並支援增量更新與 SQLite 儲存。"""
     configure_logging()

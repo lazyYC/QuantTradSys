@@ -1,33 +1,36 @@
-﻿# QuantTradSys
+# QuantTradSys
 
-量化加密資產的均值回歸實驗專案。核心流程涵蓋：
+加密 / 股票日內交易策略實驗專案。目前維護兩套主要策略：
 
-- CCXT 取得一年期 5 分鐘 K 線並寫入 SQLite。
-- Optuna 搜尋均值回歸參數，產生訓練/測試績效。
-- 依指定參數重新回測並輸出 HTML 報表（含交易圖形、統計表）。
-- 以排程器檢查最新資料、對照儲存參數產生即時訊號。
+- `mean_reversion`：均值回歸指標組合。
+- `star_xgb`：星型 K 棒辨識搭配 XGBoost 最佳化門檻。
 
-> **UI / FastAPI 備註**  
-> 互動式 Dashboard、Gradio、FastAPI 等完整前端已移至 `fullstack-end-backup` 分支保留。`main` 僅維持報表與排程必要組件。
+整體流程涵蓋資料回補、Optuna 調參、回測報告與即時訊號排程。
+
+> **UI 備註**  
+> 原 FastAPI / Gradio Dashboard 已移至 `fullstack-end-backup`。`main` 僅保留策略、報表與排程相關模組。
 
 ## 目錄概覽
 
 ```
 QuantTradSys/
-├─ scripts/                 # 命令列入口（需設定 PYTHONPATH=src）
-│  ├─ backfill_ohlcv.py     # CCXT 抓取/回補一年期資料
-│  ├─ pipeline_run_mean_rev.py  # Optuna 均值回歸調參
-│  ├─ render_mean_reversion_report.py  # 產生互動式報表
-│  └─ run_ui_dashboard.py   # (備份) UI 入口，僅在 fullstack-end-backup
+├─ scripts/                     # 命令列入口（執行前先設定 PYTHONPATH=src）
+│  ├─ backfill_ohlcv.py         # CCXT 抓取 / 回補資料（含 iso_ts 欄位）
+│  ├─ pipeline_run_mean_rev.py  # 均值回歸 Optuna 管線
+│  ├─ pipeline_run_star_xgb.py  # star_xgb Optuna 管線
+│  ├─ render_mean_reversion_report.py
+│  ├─ render_star_xgb_report.py
+│  └─ ...（其他輔助腳本）
 ├─ src/
-│  ├─ data_pipeline/        # CCXT 與資料庫存取模組
-│  ├─ optimization/         # Optuna 搜尋與切分流程
-│  ├─ pipelines/            # 均值回歸回測 / 即時管線
-│  ├─ persistence/          # 統一的 SQLite I/O（參數、交易、狀態）
-│  ├─ reporting/            # 報表用 Table Builder
-│  ├─ strategies/           # `mean_reversion` 策略實作
-│  └─ run_mean_reversion_scheduler.py # 即時訊號排程入口
-└─ storage/                 # SQLite 與 log / Optuna 設定
+│  ├─ data_pipeline/            # CCXT 與 SQLite I/O，自動維護 iso_ts
+│  ├─ optimization/             # Optuna 搜尋與 nested split 邏輯
+│  ├─ persistence/              # 參數 / 交易 / 績效 / 狀態 儲存
+│  ├─ strategies/
+│  │  ├─ mean_reversion/        # 均值回歸策略
+│  │  └─ star_xgb/              # 星型 K 棒 + XGBoost 策略
+│  ├─ reporting/                # 報表組件
+│  └─ run_*_scheduler.py        # 即時排程器
+└─ storage/                     # SQLite、報表輸出、Optuna DB
 ```
 
 ## 安裝與環境
@@ -36,72 +39,102 @@ QuantTradSys/
 python -m venv .venv
 . .venv/Scripts/Activate
 pip install -r requirements.txt
-$env:PYTHONPATH = 'src'   # 執行 scripts/* 前請先設定
+$env:PYTHONPATH = 'src'         # 執行 scripts/* 前必須設定
 ```
 
-## 資料準備：回補一年 K 線
+## 資料回補
 
 ```powershell
-python scripts/backfill_ohlcv.py BTC/USDT 5m 365 \
+python scripts/backfill_ohlcv.py BTC/USDT 5m 365 ^
     --db storage/market_data.db --exchange binance --prune
 ```
-- 初次執行會建立 `storage/market_data.db` 並建表。
-- 再次執行僅抓取缺口，`--prune` 會清理視窗前舊資料。
 
-## 參數搜尋與結果儲存
+- 初次執行會建立 `storage/market_data.db` 及 `ohlcv` 資料表。  
+- 每筆資料同時寫入 `ts`（毫秒）與 `iso_ts`（UTC ISO8601），方便人工檢視。  
+- `--prune` 會刪除觀察窗以外的舊資料，二次執行只補缺口。
+
+## Optuna 調參
+
+### 均值回歸
 
 ```powershell
-python scripts/pipeline_run_mean_rev.py \
-    --symbol BTC/USDT --timeframe 5m --lookback-days 400 \
-    --n-trials 200 --study-name mean_rev_demo \
+python scripts/pipeline_run_mean_rev.py ^
+    --symbol BTC/USDT --timeframe 5m ^
+    --lookback-days 400 ^
+    --n-trials 200 ^
+    --study-name mean_rev_prod ^
     --storage sqlite:///storage/optuna_mean_rev.db
 ```
-- 成功後會在 `storage/strategy_state.db` 寫入最佳參數 (`strategy_params`)、交易紀錄 (`strategy_trades`) 與績效摘要 (`strategy_metrics`)。
+
+### 星型 K 棒 + XGBoost
+
+```powershell
+python scripts/pipeline_run_star_xgb.py ^
+    --symbol BTC/USDT --timeframe 5m ^
+    --lookback-days 360 --test-days 30 ^
+    --n-trials 80 ^
+    --study-name star_xgb_prod ^
+    --storage sqlite:///storage/optuna_studies.db
+```
+
+- 內建 nested split：外層 Train/Test 為 11 個月 / 1 個月；內層 Train/Validation 專供 Optuna 評分。  
+- 調參階段自動套用 0.1% 交易成本，避免模型透過大量微利交易取得不合理報酬。  
+- 最佳 Trial 會重新訓練並回測，結果寫入 `storage/strategy_state.db`。
 
 ## 報表輸出
 
 ```powershell
-python scripts/render_mean_reversion_report.py \
-    --ohlcv-db storage/market_data.db \
-    --trades-db storage/strategy_state.db \
-    --metrics-db storage/strategy_state.db \
-    --symbol BTC/USDT --timeframe 5m \
-    --start 2024-01-01T00:00Z --end 2024-12-31T23:55Z \
+python scripts/render_star_xgb_report.py ^
+    --symbol BTC/USDT --timeframe 5m ^
+    --strategy star_xgb_prod --dataset test ^
+    --output reports/star_xgb_latest.html
+```
+
+```powershell
+python scripts/render_mean_reversion_report.py ^
+    --ohlcv-db storage/market_data.db ^
+    --trades-db storage/strategy_state.db ^
+    --metrics-db storage/strategy_state.db ^
+    --symbol BTC/USDT --timeframe 5m ^
+    --start 2025-01-01T00:00Z --end 2025-12-31T23:55Z ^
     --output reports/mean_rev_latest.html
 ```
-- 主圖：K 線 + 紅/綠進出場標記 + 資金曲線。
-- 子圖：每筆交易報酬柱狀圖（共用 X 軸）。
-- 表格：策略參數、視窗內績效摘要、交易分布統計、逐筆交易列表。
 
-## 即時訊號排程
+- 會整合交易標記、資金曲線、統計表與逐筆交易。  
+- 若資料庫缺少指定策略/期間資料，腳本會自動重新回測。  
+- 生成 HTML 後可直接用瀏覽器開啟或分享。
 
-1. 確保已有最佳參數寫入 `strategy_state.db`。
-2. 設定 `.env`（如 Discord Webhook）。
-3. 啟動排程器：
-   ```powershell
-   python src/run_mean_reversion_scheduler.py \
-       --lookback-days 400 --interval-minutes 5 \
-       --params-db storage/strategy_state.db \
-       --state-db storage/strategy_state.db
-   ```
-- Scheduler 會抓最新資料 → 對照參數 → 產生訊號 → 更新 runtime state。
+## 即時排程
 
-## 常見資料表
+```powershell
+python src/run_star_xgb_scheduler.py ^
+    --strategy star_xgb_prod --symbol BTC/USDT --timeframe 5m ^
+    --lookback-days 60 ^
+    --params-db storage/strategy_state.db ^
+    --state-db storage/strategy_state.db
+```
 
-| 資料庫 | 目的 | 關聯腳本 |
-| --- | --- | --- |
-| `storage/market_data.db` | OHLCV 快取 | `backfill_ohlcv.py`, 報表、排程 |
-| `storage/strategy_state.db` | 最佳參數、回測交易、報表統計 | Optuna、報表、排程 |
-| `storage/optuna_mean_rev.db` | Optuna Study 記錄 | `pipeline_run_mean_rev.py` |
+```powershell
+python src/run_mean_reversion_scheduler.py ^
+    --strategy mean_rev_prod --symbol BTC/USDT --timeframe 5m ^
+    --lookback-days 400 --interval-minutes 5
+```
 
-## UI / FastAPI 備份
+- Scheduler 會載入參數、抓取最新資料、產生訊號並更新執行狀態。  
+- 若需推播通知（Discord / Slack 等），請先設定 webhook。
 
-- 分支：`fullstack-end-backup`
-- 內容：FastAPI 路由 (`src/ui/server.py`)、Gradio 介面、Dashboard Scripts。
-- 若需回復互動式 UI，請切換至該分支或 cherry-pick 相關提交。
+## 主要資料庫表格
 
-## 開發建議
+| 資料庫 | 用途 | 重要欄位 | 來源腳本 |
+| --- | --- | --- | --- |
+| `storage/market_data.db` | OHLCV 快取 | `ts`, `iso_ts`, `open`~`volume` | `backfill_ohlcv.py`、排程、報表 |
+| `storage/strategy_state.db` | 策略參數 / 交易 / 績效 / 狀態 | `strategy_params`, `strategy_trades`, `strategy_metrics`, `strategy_runtime` | Optuna、報表、排程 |
+| `storage/optuna_*.db` | Optuna Study | `trials`, `trial_params`, `trial_values` | `pipeline_run_*` |
 
-- 所有模組預設以函數式流程組合，便於單元測試與重複使用。
-- 重要日誌以英文 INFO/DEBUG 記錄，方便整合第三方監控。
-- 建議透過虛擬環境或容器執行，確保 `PYTHONPATH` 與 SQLite 路徑一致。
+## 開發指引
+
+- 註解採用繁體中文；日誌使用英文，INFO 紀錄重要事件，DEBUG 提供調試細節。  
+- 資料處理與訊號邏輯盡量採函數式撰寫，方便測試與重複利用。  
+- 新增策略時，請放入 `/strategies` 並繼承既有抽象結構。  
+- 中文檔案建議使用 `scripts/cat_utf8.ps1` 或設定 PowerShell `OutputEncoding` 以避免亂碼。  
+- 若需恢復互動式 UI，可切換至 `fullstack-end-backup` 分支或自行 cherry-pick。

@@ -76,7 +76,7 @@ def save_runtime_state(
 
 def load_runtime_state(
     db_path: Path,
-    *,
+    # *,
     strategy: str,
     symbol: str,
     timeframe: str,

@@ -19,10 +19,17 @@ LOGGER = logging.getLogger(__name__)
 def dataframe_to_rows(df: pd.DataFrame) -> list[tuple]:
     rows: list[tuple] = []
     for _, row in df.iterrows():
-        ts = int(pd.Timestamp(row["timestamp"]).timestamp() * 1000)
+        timestamp = pd.Timestamp(row["timestamp"])
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize("UTC")
+        else:
+            timestamp = timestamp.tz_convert("UTC")
+        ts = int(timestamp.timestamp() * 1000)
+        iso_ts = timestamp.isoformat().replace("+00:00", "Z")
         rows.append(
             (
                 ts,
+                iso_ts,
                 float(row["open"]),
                 float(row["high"]),
                 float(row["low"]),

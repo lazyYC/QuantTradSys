@@ -21,7 +21,7 @@ def _query_dataframe(conn: sqlite3.Connection, query: str, params: Sequence[obje
 
 def load_trades(
     db_path: Path,
-    *,
+    # *,
     strategy: str,
     dataset: Optional[str] = None,
     symbol: Optional[str] = None,
@@ -58,7 +58,6 @@ def load_trades(
 
 def load_metrics(
     db_path: Path,
-    *,
     strategy: str,
     dataset: Optional[str] = None,
     symbol: Optional[str] = None,
