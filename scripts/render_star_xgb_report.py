@@ -117,6 +117,7 @@ def _load_candles_from_db(
 def _load_trades_from_db(
     args: argparse.Namespace,
     *,
+    dataset_label: str | None = None,
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
@@ -128,11 +129,12 @@ def _load_trades_from_db(
         params_path = Path(args.params_db)
         if params_path not in candidates:
             candidates.append(params_path)
+    dataset = dataset_label or args.dataset
     for db_path in candidates:
         df = load_trades(
             db_path,
             strategy=args.strategy,
-            dataset=args.dataset,
+            dataset=dataset,
             symbol=args.symbol,
             timeframe=args.timeframe,
             run_id=args.run_id,
@@ -148,6 +150,7 @@ def _load_trades_from_db(
 def _load_metrics_from_db(
     args: argparse.Namespace,
     *,
+    dataset_label: str | None = None,
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
@@ -159,11 +162,12 @@ def _load_metrics_from_db(
         params_path = Path(args.params_db)
         if params_path not in candidates:
             candidates.append(params_path)
+    dataset = dataset_label or args.dataset
     for db_path in candidates:
         df = load_metrics(
             db_path,
             strategy=args.strategy,
-            dataset=args.dataset,
+            dataset=dataset,
             symbol=args.symbol,
             timeframe=args.timeframe,
             run_id=args.run_id,
@@ -250,6 +254,8 @@ def _collect_figures(
     equity_df: pd.DataFrame,
     metrics_df: pd.DataFrame,
     params: Optional[Mapping[str, object]],
+    *,
+    sections: Optional[List[Mapping[str, object]]] = None,
 ) -> List[Tuple[str, object]]:
     """組裝圖表與表格。"""
     figures: List[Tuple[str, object]] = []
@@ -270,6 +276,34 @@ def _collect_figures(
             overview = build_trade_overview_figure(candles, trimmed_trades, equity=trimmed_equity, show_markers=True)
         else:
             overview = build_candlestick_figure(candles, title="Price Overview")
+        if sections:
+            color_cycle = [
+                "rgba(63, 81, 181, 0.12)",
+                "rgba(244, 67, 54, 0.12)",
+                "rgba(255, 193, 7, 0.12)",
+            ]
+            sorted_sections = [s for s in sections if s.get("start") is not None and s.get("end") is not None]
+            sorted_sections.sort(key=lambda item: item["start"])
+            for idx, section in enumerate(sorted_sections):
+                start_ts = section.get("start")
+                end_ts = section.get("end")
+                label = section.get("label")
+                if not isinstance(start_ts, pd.Timestamp) or not isinstance(end_ts, pd.Timestamp):
+                    continue
+                if pd.isna(start_ts) or pd.isna(end_ts) or end_ts <= start_ts:
+                    continue
+                color = color_cycle[idx % len(color_cycle)]
+                overview.add_vrect(x0=start_ts, x1=end_ts, fillcolor=color, opacity=0.35, line_width=0, layer="below")
+                mid = start_ts + (end_ts - start_ts) / 2
+                overview.add_annotation(
+                    x=mid,
+                    yref="paper",
+                    y=1.05,
+                    text=str(label) if label else f"Section {idx + 1}",
+                    showarrow=False,
+                    font=dict(size=11),
+                    align="center",
+                )
         figures.append(("價格與交易", overview))
     if params:
         indicator_fig = create_params_table(params.get("indicator"))
@@ -328,7 +362,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--metrics-db", default="storage/strategy_state.db", help="策略績效摘要 SQLite 檔")
     parser.add_argument("--params-db", default="storage/strategy_state.db", help="策略參數 SQLite 檔")
     parser.add_argument("--strategy", default="star_xgb_default", help="策略名稱 (同 study name)")
-    parser.add_argument("--dataset", default="all", help="資料集標籤 (train/test/all)")
+    parser.add_argument(
+        "--dataset",
+        default="test",
+        choices=["train", "valid", "test", "all"],
+        help="選擇要呈現的資料集（train / valid / test / all）",
+    )
     parser.add_argument("--symbol", default="BTC/USDT", help="交易對")
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
@@ -357,8 +396,40 @@ def main() -> None:
     if candles.empty:
         raise SystemExit("無法取得 K 線資料，請確認輸入來源。")
 
-    trades_df = _load_trades_from_db(args, start_ts=start_ts, end_ts=end_ts)
-    metrics_df = _load_metrics_from_db(args, start_ts=start_ts, end_ts=end_ts)
+    sections: List[Mapping[str, object]] = []
+
+    if args.dataset == "all":
+        trade_frames: List[pd.DataFrame] = []
+        metric_frames: List[pd.DataFrame] = []
+        for ds in ("train", "valid", "test"):
+            trades_ds = _load_trades_from_db(args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts)
+            if not trades_ds.empty:
+                trades_local = trades_ds.copy()
+                trades_local["dataset"] = ds
+                trade_frames.append(trades_local)
+            metrics_ds = _load_metrics_from_db(args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts)
+            if not metrics_ds.empty:
+                metrics_local = metrics_ds.copy()
+                metrics_local["dataset"] = ds
+                metric_frames.append(metrics_local.head(1))
+                start_val = metrics_local.iloc[0].get("period_start")
+                end_val = metrics_local.iloc[0].get("period_end")
+                start_section = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
+                end_section = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
+                if isinstance(start_section, pd.Timestamp) and isinstance(end_section, pd.Timestamp):
+                    if pd.notna(start_section) and pd.notna(end_section) and end_section > start_section:
+                        sections.append({"label": ds.capitalize(), "start": start_section, "end": end_section})
+
+        trades_df = pd.concat(trade_frames, ignore_index=True) if trade_frames else pd.DataFrame()
+        metrics_df = pd.concat(metric_frames, ignore_index=True) if metric_frames else pd.DataFrame()
+        if not trades_df.empty and "entry_time" in trades_df.columns:
+            trades_df = trades_df.sort_values("entry_time").reset_index(drop=True)
+        if not metrics_df.empty:
+            metrics_df = metrics_df.reset_index(drop=True)
+    else:
+        trades_df = _load_trades_from_db(args, start_ts=start_ts, end_ts=end_ts)
+        metrics_df = _load_metrics_from_db(args, start_ts=start_ts, end_ts=end_ts)
+
     equity_df = _build_equity_from_trades(trades_df)
 
     params_dict: Optional[Mapping[str, object]] = None
@@ -369,11 +440,15 @@ def main() -> None:
             trades_df = bt_trades
             trades_df = _filter_by_time(trades_df, "entry_time", start_ts, end_ts)
             trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
+            if args.dataset == "all" and not trades_df.empty:
+                trades_df["dataset"] = trades_df.get("dataset", "all")
         if equity_df.empty:
             equity_df = bt_equity
             equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
         if metrics_df.empty:
             metrics_df = bt_metrics
+            if args.dataset == "all" and not metrics_df.empty:
+                metrics_df["dataset"] = metrics_df.get("dataset", "all")
         if params_from_bt is not None:
             params_dict = params_from_bt
 
@@ -400,8 +475,34 @@ def main() -> None:
                 }
             ]
         )
+        if args.dataset == "all":
+            metrics_df["dataset"] = "all"
 
-    figures = _collect_figures(candles, trades_df, equity_df, metrics_df, params_dict)
+    if args.dataset == "all" and not metrics_df.empty and not sections:
+        if {"period_start", "period_end"}.issubset(metrics_df.columns):
+            for _, row in metrics_df.iterrows():
+                start_val = row.get("period_start")
+                end_val = row.get("period_end")
+                dataset_label = row.get("dataset", "Section")
+                start_ts = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
+                end_ts = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
+                if isinstance(start_ts, pd.Timestamp) and isinstance(end_ts, pd.Timestamp):
+                    if pd.notna(start_ts) and pd.notna(end_ts) and end_ts > start_ts:
+                        sections.append(
+                            {
+                                "label": str(dataset_label).capitalize(),
+                                "start": start_ts,
+                                "end": end_ts,
+                            }
+                        )
+    figures = _collect_figures(
+        candles,
+        trades_df,
+        equity_df,
+        metrics_df,
+        params_dict,
+        sections=sections if sections else None,
+    )
     if not figures:
         raise SystemExit("沒有可輸出的圖表或表格，請確認資料來源。")
     _write_html(figures, Path(args.output), args.title)

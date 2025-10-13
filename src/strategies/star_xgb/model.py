@@ -278,9 +278,11 @@ def _fit_model(
 ) -> Tuple[lgb.LGBMClassifier, np.ndarray]:
     eval_set = None
     eval_sample_weight = None
+    callbacks = []
     if not valid_df.empty:
         eval_set = [(valid_df[feature_cols], valid_df[TARGET_COLUMN])]
         eval_sample_weight = [valid_df[SAMPLE_WEIGHT_COLUMN]]
+        callbacks.append(lgb.early_stopping(stopping_rounds=50, verbose=False))
     model.fit(
         train_df[feature_cols],
         train_df[TARGET_COLUMN],
@@ -288,7 +290,7 @@ def _fit_model(
         eval_set=eval_set,
         eval_sample_weight=eval_sample_weight,
         eval_metric="multi_logloss",
-        callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)],
+        callbacks=callbacks,
     )
     target_df = valid_df if not valid_df.empty else train_df
     probs = model.predict_proba(target_df[feature_cols])
