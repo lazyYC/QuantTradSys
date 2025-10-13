@@ -30,12 +30,16 @@ LOGGER = logging.getLogger(__name__)
 
 RESULT_GUARD_DIR = Path("storage/optuna_result_flags")
 
+TRANSACTION_COST = 0.001
+MIN_VALIDATION_DAYS = 30
+
 
 @dataclass
 class StarOptunaResult:
     study: optuna.Study
     best_training_result: StarTrainingResult
     train_backtest: StarBacktestResult
+    valid_backtest: StarBacktestResult
     test_backtest: StarBacktestResult
 
 
@@ -163,7 +167,13 @@ def optimize_star_xgb(
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 result = train_star_model(
-                    dataset, indicator_params, [model_params], model_dir=Path(tmpdir), valid_days=30
+                    dataset,
+                    indicator_params,
+                    [model_params],
+                    model_dir=Path(tmpdir),
+                    valid_days=MIN_VALIDATION_DAYS,
+                    transaction_cost=TRANSACTION_COST,
+                    min_validation_days=MIN_VALIDATION_DAYS,
                 )
             except ValueError as exc:
                 raise optuna.TrialPruned(str(exc)) from exc
@@ -194,11 +204,27 @@ def optimize_star_xgb(
     train_dataset = build_training_dataset(train_features, train_labels, class_thresholds=train_thresholds)
 
     training_result = train_star_model(
-        train_dataset, best_indicator, [best_model_params], model_dir=model_dir, valid_days=0 # 使用全部訓練資料
+        train_dataset,
+        best_indicator,
+        [best_model_params],
+        model_dir=model_dir,
+        valid_days=0,  # 使用全部訓練資料
+        transaction_cost=TRANSACTION_COST,
+        min_validation_days=MIN_VALIDATION_DAYS,
     )
 
+    inner_validation_days = max(
+        MIN_VALIDATION_DAYS,
+        min(test_days, lookback_days - test_days) if lookback_days > test_days else MIN_VALIDATION_DAYS,
+    )
+    train_core_df, validation_df = split_train_test(train_df, test_days=inner_validation_days)
+    if train_core_df.empty:
+        train_core_df = train_df.copy()
+    if validation_df.empty:
+        validation_df = pd.DataFrame(columns=train_df.columns)
+
     train_bt_result = backtest_star_xgb(
-        train_df,
+        train_core_df,
         training_result.indicator_params,
         training_result.model_params,
         model_path=str(training_result.model_path),
@@ -206,6 +232,19 @@ def optimize_star_xgb(
         class_means=training_result.class_means,
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
+        transaction_cost=TRANSACTION_COST,
+    )
+
+    valid_bt_result = backtest_star_xgb(
+        validation_df,
+        training_result.indicator_params,
+        training_result.model_params,
+        model_path=str(training_result.model_path),
+        timeframe=timeframe,
+        class_means=training_result.class_means,
+        class_thresholds=training_result.class_thresholds,
+        feature_columns=training_result.feature_columns,
+        transaction_cost=TRANSACTION_COST,
     )
 
     test_bt_result = backtest_star_xgb(
@@ -217,6 +256,7 @@ def optimize_star_xgb(
         class_means=training_result.class_means,
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
+        transaction_cost=TRANSACTION_COST,
     )
 
     # 儲存結果
@@ -255,6 +295,16 @@ def optimize_star_xgb(
             save_trades(
                 trades_store_path,
                 strategy=strategy_key,
+                dataset="valid",
+                symbol=symbol,
+                timeframe=timeframe,
+                trades=valid_bt_result.trades,
+                metrics=format_metrics(valid_bt_result.metrics),
+                run_id=run_id,
+            )
+            save_trades(
+                trades_store_path,
+                strategy=strategy_key,
                 dataset="test",
                 symbol=symbol,
                 timeframe=timeframe,
@@ -269,5 +319,6 @@ def optimize_star_xgb(
         study=study,
         best_training_result=training_result,
         train_backtest=train_bt_result,
+        valid_backtest=valid_bt_result,
         test_backtest=test_bt_result,
     )

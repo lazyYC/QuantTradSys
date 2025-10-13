@@ -12,7 +12,11 @@ LOGGER = logging.getLogger(__name__)
 def _query_dataframe(conn: sqlite3.Connection, query: str, params: Sequence[object]) -> pd.DataFrame:
     """以 pandas 讀取查詢結果並轉換時間欄位。"""
     df = pd.read_sql_query(query, conn, params=params)
-    time_cols = [col for col in df.columns if col.endswith('_time') or col.endswith('_at')]
+    time_cols = [
+        col
+        for col in df.columns
+        if col.endswith('_time') or col.endswith('_at') or col.endswith('_start') or col.endswith('_end')
+    ]
     for col in time_cols:
         df[col] = pd.to_datetime(df[col], utc=True, errors='coerce')
     return df
@@ -126,6 +130,8 @@ CREATE TABLE IF NOT EXISTS strategy_metrics (
     max_drawdown REAL,
     win_rate REAL,
     trades INTEGER,
+    period_start TEXT,
+    period_end TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (run_id, strategy, dataset, symbol, timeframe)
 );
@@ -140,7 +146,17 @@ def _ensure_connection(path: Path) -> sqlite3.Connection:
     with conn:
         conn.executescript(TRADE_SCHEMA_SQL)
         conn.executescript(METRIC_SCHEMA_SQL)
+        _ensure_metric_columns(conn)
     return conn
+
+
+def _ensure_metric_columns(conn: sqlite3.Connection) -> None:
+    cursor = conn.execute("PRAGMA table_info(strategy_metrics)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "period_start" not in columns:
+        conn.execute("ALTER TABLE strategy_metrics ADD COLUMN period_start TEXT")
+    if "period_end" not in columns:
+        conn.execute("ALTER TABLE strategy_metrics ADD COLUMN period_end TEXT")
 
 
 def save_trades(
@@ -194,8 +210,8 @@ def save_trades(
             INSERT OR REPLACE INTO strategy_metrics (
                 run_id, strategy, dataset, symbol, timeframe,
                 annualized_return, total_return, sharpe, max_drawdown,
-                win_rate, trades, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                win_rate, trades, period_start, period_end, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_identifier,
@@ -209,6 +225,8 @@ def save_trades(
                 float(metrics.get("max_drawdown", 0.0)),
                 float(metrics.get("win_rate", 0.0)),
                 int(metrics.get("trades", 0)),
+                metrics.get("period_start"),
+                metrics.get("period_end"),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )

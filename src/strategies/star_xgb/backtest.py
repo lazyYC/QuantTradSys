@@ -23,6 +23,8 @@ class StarBacktestResult:
     trades: pd.DataFrame
     metrics: Dict[str, float]
     equity_curve: pd.DataFrame
+    period_start: Optional[pd.Timestamp]
+    period_end: Optional[pd.Timestamp]
 
 
 def _build_signal_records(
@@ -33,6 +35,8 @@ def _build_signal_records(
     indicator_params: StarIndicatorParams,
     class_means: List[float],
     timeframe: str,
+    *,
+    transaction_cost: float = 0.0,
 ) -> pd.DataFrame:
     """從模型預測中建立交易記錄。"""
     if dataset.empty:
@@ -47,7 +51,13 @@ def _build_signal_records(
     pred_idx = probs.argmax(axis=1)
     pred_class = CLASS_VALUES[pred_idx]
 
-    trades = _simulate_trades(dataset, expected_returns, pred_class, model_params)
+    trades = _simulate_trades(
+        dataset,
+        expected_returns,
+        pred_class,
+        model_params,
+        transaction_cost=transaction_cost,
+    )
     return trades
 
 
@@ -76,12 +86,20 @@ def backtest_star_xgb(
     class_means: List[float],
     class_thresholds: Dict[str, float],
     feature_columns: Optional[List[str]] = None,
+    *,
+    transaction_cost: float = 0.0,
 ) -> StarBacktestResult:
     """
     執行 star_xgb 策略的端到端回測。
     """
     if ohlcv.empty:
-        return StarBacktestResult(trades=pd.DataFrame(), metrics={}, equity_curve=pd.DataFrame())
+        return StarBacktestResult(
+            trades=pd.DataFrame(),
+            metrics={},
+            equity_curve=pd.DataFrame(),
+            period_start=None,
+            period_end=None,
+        )
 
     cache = StarFeatureCache(
         ohlcv,
@@ -96,7 +114,13 @@ def backtest_star_xgb(
     dataset = build_training_dataset(features, labels, class_thresholds=class_thresholds)
 
     if dataset.empty:
-        return StarBacktestResult(trades=pd.DataFrame(), metrics={}, equity_curve=pd.DataFrame())
+        return StarBacktestResult(
+            trades=pd.DataFrame(),
+            metrics={},
+            equity_curve=pd.DataFrame(),
+            period_start=None,
+            period_end=None,
+        )
 
     booster = load_star_model(model_path)
     
@@ -108,7 +132,13 @@ def backtest_star_xgb(
     probs = probs.reshape(len(dataset), -1)
 
     class_means_arr = np.asarray(class_means, dtype=float)
-    metrics = _evaluate(dataset, probs, model_params, class_means_arr)
+    metrics = _evaluate(
+        dataset,
+        probs,
+        model_params,
+        class_means_arr,
+        transaction_cost=transaction_cost,
+    )
 
     trades = _build_signal_records(
         dataset,
@@ -118,6 +148,7 @@ def backtest_star_xgb(
         indicator_params,
         class_means,
         timeframe,
+        transaction_cost=transaction_cost,
     )
 
     equity_curve = _build_equity_curve(trades)
@@ -161,8 +192,21 @@ def backtest_star_xgb(
                         metrics["sharpe"] = float(sharpe)
     metrics["score"] = metrics.get("total_return", 0.0)
 
+    timestamps = pd.to_datetime(ohlcv["timestamp"], utc=True, errors="coerce")
+    if timestamps.notna().any():
+        period_start = timestamps.min()
+        period_end = timestamps.max()
+    else:
+        period_start = None
+        period_end = None
+
+    metrics["period_start"] = period_start.isoformat() if isinstance(period_start, pd.Timestamp) else None
+    metrics["period_end"] = period_end.isoformat() if isinstance(period_end, pd.Timestamp) else None
+
     return StarBacktestResult(
         trades=trades,
         metrics=metrics,
         equity_curve=equity_curve,
+        period_start=period_start,
+        period_end=period_end,
     )

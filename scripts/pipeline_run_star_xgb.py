@@ -78,6 +78,8 @@ def _format_metrics_and_explain(metrics: Dict) -> str:
     for key, value in metrics.items():
         if key in seen:
             continue
+        if key in {"period_start", "period_end"}:
+            continue
         seen.add(key)
         if isinstance(value, float):
             if key in PERCENT_KEYS:
@@ -93,6 +95,20 @@ def _format_metrics_and_explain(metrics: Dict) -> str:
             )
 
     return "\n".join(formatted_metrics)
+
+
+def _render_section(title: str, backtest_result) -> None:
+    metrics = backtest_result.metrics if backtest_result and backtest_result.metrics else {}
+    start = metrics.get("period_start")
+    end = metrics.get("period_end")
+    header = title
+    if start and end:
+        header = f"{title} [{start} ~ {end}]"
+    print("\n" + "-" * 35)
+    print(f" {header}".center(35))
+    print("-" * 35)
+    metrics_for_display = {k: v for k, v in metrics.items() if k not in {"period_start", "period_end"}}
+    print(_format_metrics_and_explain(metrics_for_display))
 
 
 if __name__ == '__main__':
@@ -137,15 +153,9 @@ if __name__ == '__main__':
     print("\n" + _format_params_as_table(best_indicator_params, "Best Indicator Parameters"))
     print("\n" + _format_params_as_table(best_model_params, "Best Model Hyperparameters"))
     print(f"\nModel saved to: {result.best_training_result.model_path}")
-    print("\n" + "-"*35)
-    print(" Backtest Results: Train Set".center(35))
-    print("-"*35)
-    print(_format_metrics_and_explain(result.train_backtest.metrics))
-
-    print("\n" + "-"*35)
-    print(" Backtest Results: Test Set".center(35))
-    print("-"*35)
-    print(_format_metrics_and_explain(result.test_backtest.metrics))
+    _render_section("Backtest Results: Train Set", result.train_backtest)
+    _render_section("Backtest Results: Validation Set", result.valid_backtest)
+    _render_section("Backtest Results: Test Set", result.test_backtest)
     print("\n" + "="*80)
     print("Note: 'Best Value' is the score from the objective function, which is the total return on the validation set during the optimization phase.".center(80))
     print("="*80)

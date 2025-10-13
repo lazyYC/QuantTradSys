@@ -43,6 +43,8 @@ def _simulate_trades(
     expected_returns: np.ndarray,
     pred_classes: np.ndarray,
     params: StarModelParams,
+    *,
+    transaction_cost: float = 0.0,
 ) -> pd.DataFrame:
     """依據預測類別與預期報酬模擬交易，回傳完整交易表。"""
     trade_columns = [
@@ -95,6 +97,8 @@ def _simulate_trades(
                     ret = (close_price - entry_price) / entry_price
                 else:
                     ret = (entry_price - close_price) / entry_price
+                if transaction_cost:
+                    ret -= transaction_cost
                 holding_minutes = max((ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0)
                 records.append(
                     {
@@ -142,6 +146,8 @@ def _simulate_trades(
             ret = (last_price - open_trade["entry_price"]) / open_trade["entry_price"]
         else:
             ret = (open_trade["entry_price"] - last_price) / open_trade["entry_price"]
+        if transaction_cost:
+            ret -= transaction_cost
         holding_minutes = max((last_ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0)
         records.append(
             {
@@ -300,6 +306,8 @@ def _evaluate(
     probs: np.ndarray,
     params: StarModelParams,
     class_means: np.ndarray,
+    *,
+    transaction_cost: float = 0.0,
 ) -> Dict[str, float]:
     if df.empty:
         metrics = {
@@ -318,7 +326,13 @@ def _evaluate(
     accuracy = float(accuracy_score(y_true, pred_classes))
     mae_expected = float(mean_absolute_error(df["future_short_return"], expected_returns))
 
-    trades = _simulate_trades(df, expected_returns, pred_classes, params)
+    trades = _simulate_trades(
+        df,
+        expected_returns,
+        pred_classes,
+        params,
+        transaction_cost=transaction_cost,
+    )
     summary = _summarize_trades(trades)
 
     metrics = {
@@ -358,6 +372,8 @@ def train_star_model(
     *,
     model_dir: Path,
     valid_days: int = 30,
+    transaction_cost: float = 0.0,
+    min_validation_days: int = 30,
 ) -> StarTrainingResult:
     """針對單一指標參數搜尋最佳模型。"""
     if dataset.empty:
@@ -367,22 +383,32 @@ def train_star_model(
     if not feature_cols:
         raise ValueError("找不到可用於建模的特徵欄位")
 
-    train_df, test_df = _split_train_valid(dataset, valid_days=valid_days)
-    base_df, valid_df = _split_train_valid(train_df, valid_days=min(15, valid_days))
-    if base_df.empty:
-        base_df = train_df
-        valid_df = pd.DataFrame(columns=train_df.columns)
+    if valid_days <= 0:
+        train_df = dataset.copy()
+        valid_df = pd.DataFrame(columns=dataset.columns)
+    else:
+        validation_window = max(valid_days, min_validation_days)
+        train_df, valid_df = _split_train_valid(dataset, valid_days=validation_window)
+        if train_df.empty:
+            train_df = dataset.copy()
+            valid_df = pd.DataFrame(columns=dataset.columns)
 
-    class_means = _compute_class_means(train_df)
+    class_means = _compute_class_means(train_df if not train_df.empty else dataset)
 
     rankings: List[Dict[str, object]] = []
     best_tuple: Tuple[StarModelParams, Dict[str, float], lgb.LGBMClassifier, np.ndarray] | None = None
 
     for model_params in model_candidates:
         model = _init_model(model_params)
-        fitted_model, val_probs = _fit_model(model, base_df, valid_df, feature_cols)
-        val_target_df = valid_df if not valid_df.empty else base_df
-        metrics = _evaluate(val_target_df, val_probs, model_params, class_means)
+        fitted_model, val_probs = _fit_model(model, train_df, valid_df, feature_cols)
+        val_target_df = valid_df if not valid_df.empty else train_df
+        metrics = _evaluate(
+            val_target_df,
+            val_probs,
+            model_params,
+            class_means,
+            transaction_cost=transaction_cost,
+        )
         score = _score_metric(metrics)
         record = {
             "indicator_params": indicator_params.as_dict(rounded=True),
@@ -410,22 +436,35 @@ def train_star_model(
         eval_set=None,
     )
     train_probs = final_model.predict_proba(train_df[feature_cols]) if not train_df.empty else np.empty((0, NUM_CLASSES))
-    train_metrics = _evaluate(train_df, train_probs, best_model_params, class_means)
-    test_probs = (
-        final_model.predict_proba(test_df[feature_cols]) if not test_df.empty else np.empty((0, NUM_CLASSES))
+    train_metrics = _evaluate(
+        train_df,
+        train_probs,
+        best_model_params,
+        class_means,
+        transaction_cost=transaction_cost,
     )
-    test_metrics = _evaluate(test_df, test_probs, best_model_params, class_means)
+    valid_probs = (
+        final_model.predict_proba(valid_df[feature_cols]) if not valid_df.empty else np.empty((0, NUM_CLASSES))
+    )
+    test_metrics = _evaluate(
+        valid_df,
+        valid_probs,
+        best_model_params,
+        class_means,
+        transaction_cost=transaction_cost,
+    )
 
     model_dir.mkdir(parents=True, exist_ok=True)
     model_filename = f"star_xgb_{indicator_params.trend_window}_{best_model_params.num_leaves}.txt"
     model_path = model_dir / model_filename
     final_model.booster_.save_model(str(model_path))
 
+    threshold_source = train_df if not train_df.empty else dataset
     class_thresholds = {
-        "q10": float(train_df["q10"].iloc[0]) if "q10" in train_df.columns else 0.0,
-        "q25": float(train_df["q25"].iloc[0]) if "q25" in train_df.columns else 0.0,
-        "q75": float(train_df["q75"].iloc[0]) if "q75" in train_df.columns else 0.0,
-        "q90": float(train_df["q90"].iloc[0]) if "q90" in train_df.columns else 0.0,
+        "q10": float(threshold_source["q10"].iloc[0]) if "q10" in threshold_source.columns and not threshold_source.empty else 0.0,
+        "q25": float(threshold_source["q25"].iloc[0]) if "q25" in threshold_source.columns and not threshold_source.empty else 0.0,
+        "q75": float(threshold_source["q75"].iloc[0]) if "q75" in threshold_source.columns and not threshold_source.empty else 0.0,
+        "q90": float(threshold_source["q90"].iloc[0]) if "q90" in threshold_source.columns and not threshold_source.empty else 0.0,
     }
 
     result = StarTrainingResult(
