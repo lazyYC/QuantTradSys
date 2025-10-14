@@ -236,6 +236,7 @@ def _run_backtest_from_params(
         class_means=list(class_means),
         class_thresholds=dict(class_thresholds),
         feature_columns=list(feature_columns),
+        transaction_cost=0.001,
     )
     trades = result.trades.copy()
     if not trades.empty:

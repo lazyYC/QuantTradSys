@@ -72,6 +72,7 @@ ehthumbs.db
 Thumbs.db
 
 *.csv
+*.png
 *.log
 *.ini
 *.json

@@ -156,6 +156,3 @@ if __name__ == '__main__':
     _render_section("Backtest Results: Train Set", result.train_backtest)
     _render_section("Backtest Results: Validation Set", result.valid_backtest)
     _render_section("Backtest Results: Test Set", result.test_backtest)
-    print("\n" + "="*80)
-    print("Note: 'Best Value' is the score from the objective function, which is the total return on the validation set during the optimization phase.".center(80))
-    print("="*80)
