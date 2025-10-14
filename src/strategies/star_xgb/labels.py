@@ -2,7 +2,7 @@
 """star_xgb 策略的標籤建構。"""
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -12,7 +12,12 @@ from .params import StarIndicatorParams
 RETURN_CLASSES = (-2, -1, 0, 1, 2)
 
 
-def build_label_frame(features: pd.DataFrame, params: StarIndicatorParams) -> Tuple[pd.DataFrame, Dict[str, float]]:
+def build_label_frame(
+    features: pd.DataFrame,
+    params: StarIndicatorParams,
+    *,
+    thresholds: Optional[Dict[str, float]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """根據特徵資料建立多分類標籤與報酬欄位。"""
     required = {"timestamp", "close", "low", "high", "upper_shadow_ratio", "body_ratio", "volume_ratio"}
     missing = required.difference(features.columns)
@@ -35,12 +40,20 @@ def build_label_frame(features: pd.DataFrame, params: StarIndicatorParams) -> Tu
     future_long_return = future_close_return
     future_best_long_return = (future_high - close) / close.replace(0.0, pd.NA)
 
-    valid_returns = future_long_return.dropna().to_numpy()
-    if valid_returns.size == 0:
-        thresholds = {"q10": 0.0, "q25": 0.0, "q75": 0.0, "q90": 0.0}
+    if thresholds is None:
+        valid_returns = future_long_return.dropna().to_numpy()
+        if valid_returns.size == 0:
+            thresholds = {"q10": 0.0, "q25": 0.0, "q75": 0.0, "q90": 0.0}
+        else:
+            q10, q25, q75, q90 = np.quantile(valid_returns, [0.1, 0.25, 0.75, 0.9])
+            thresholds = {"q10": float(q10), "q25": float(q25), "q75": float(q75), "q90": float(q90)}
     else:
-        q10, q25, q75, q90 = np.quantile(valid_returns, [0.1, 0.25, 0.75, 0.9])
-        thresholds = {"q10": float(q10), "q25": float(q25), "q75": float(q75), "q90": float(q90)}
+        thresholds = {
+            "q10": float(thresholds.get("q10", 0.0)),
+            "q25": float(thresholds.get("q25", 0.0)),
+            "q75": float(thresholds.get("q75", 0.0)),
+            "q90": float(thresholds.get("q90", 0.0)),
+        }
 
     def _assign_class(value: float) -> int:
         if np.isnan(value):

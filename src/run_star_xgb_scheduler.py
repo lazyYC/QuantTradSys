@@ -98,7 +98,7 @@ def run_star_cycle(
         pattern_windows=[indicator.pattern_lookback],
     )
 
-    action, context, new_state = generate_realtime_signal(
+    raw_action, context, new_state = generate_realtime_signal(
         df=cleaned, 
         indicator_params=indicator, 
         model_params=model_params, 
@@ -108,17 +108,17 @@ def run_star_cycle(
         cache=cache, 
         state=runtime_state
     )
-    action = f"{YELLOW}{action}{RESET}"
+    colored_action = f"{YELLOW}{raw_action}{RESET}"
     context.update({"strategy": strategy, "symbol": symbol, "timeframe": timeframe})
-    LOGGER.info("star_xgb action=%s details=%s", action, context)
+    LOGGER.info("star_xgb action=%s details=%s", colored_action, context)
 
-    if action != "HOLD":
-        dispatch_signal(action, context)
+    if raw_action != "HOLD":
+        dispatch_signal(raw_action, context)
 
     if new_state != runtime_state:
         save_runtime_state(state_store_path, strategy, symbol, timeframe, state=new_state.to_dict())
     
-    return {"action": action, "context": context, "state": new_state.to_dict()}
+    return {"action": raw_action, "context": context, "state": new_state.to_dict()}
 
 
 def main() -> None:

@@ -110,8 +110,9 @@ def backtest_star_xgb(
         pattern_windows=[indicator_params.pattern_lookback],
     )
     features = cache.build_features(indicator_params)
-    labels, _ = build_label_frame(features, indicator_params)
-    dataset = build_training_dataset(features, labels, class_thresholds=class_thresholds)
+    label_thresholds = class_thresholds if class_thresholds else None
+    labels, thresholds_used = build_label_frame(features, indicator_params, thresholds=label_thresholds)
+    dataset = build_training_dataset(features, labels, class_thresholds=thresholds_used)
 
     if dataset.empty:
         return StarBacktestResult(
