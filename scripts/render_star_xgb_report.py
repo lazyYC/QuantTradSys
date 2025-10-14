@@ -262,15 +262,15 @@ def _collect_figures(
     trimmed_trades = trades
     trimmed_equity = equity_df
     if not candles.empty:
-        start_ts = candles["timestamp"].min()
-        end_ts = candles["timestamp"].max()
+        window_start = candles["timestamp"].min()
+        window_end = candles["timestamp"].max()
         if not trades.empty and {"entry_time", "exit_time"}.issubset(trades.columns):
             trimmed_trades = trades[
-                (trades["exit_time"] >= start_ts) & (trades["entry_time"] <= end_ts)
+                (trades["exit_time"] >= window_start) & (trades["entry_time"] <= window_end)
             ]
         if not equity_df.empty and {"timestamp"}.issubset(equity_df.columns):
             trimmed_equity = equity_df[
-                (equity_df["timestamp"] >= start_ts) & (equity_df["timestamp"] <= end_ts)
+                (equity_df["timestamp"] >= window_start) & (equity_df["timestamp"] <= window_end)
             ]
         if not trimmed_trades.empty or (trimmed_equity is not None and not trimmed_equity.empty):
             overview = build_trade_overview_figure(candles, trimmed_trades, equity=trimmed_equity, show_markers=True)
@@ -285,16 +285,23 @@ def _collect_figures(
             sorted_sections = [s for s in sections if s.get("start") is not None and s.get("end") is not None]
             sorted_sections.sort(key=lambda item: item["start"])
             for idx, section in enumerate(sorted_sections):
-                start_ts = section.get("start")
-                end_ts = section.get("end")
+                section_start = section.get("start")
+                section_end = section.get("end")
                 label = section.get("label")
-                if not isinstance(start_ts, pd.Timestamp) or not isinstance(end_ts, pd.Timestamp):
+                if not isinstance(section_start, pd.Timestamp) or not isinstance(section_end, pd.Timestamp):
                     continue
-                if pd.isna(start_ts) or pd.isna(end_ts) or end_ts <= start_ts:
+                if pd.isna(section_start) or pd.isna(section_end) or section_end <= section_start:
                     continue
                 color = color_cycle[idx % len(color_cycle)]
-                overview.add_vrect(x0=start_ts, x1=end_ts, fillcolor=color, opacity=0.35, line_width=0, layer="below")
-                mid = start_ts + (end_ts - start_ts) / 2
+                overview.add_vrect(
+                    x0=section_start,
+                    x1=section_end,
+                    fillcolor=color,
+                    opacity=0.35,
+                    line_width=0,
+                    layer="below",
+                )
+                mid = section_start + (section_end - section_start) / 2
                 overview.add_annotation(
                     x=mid,
                     yref="paper",
@@ -354,7 +361,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render star_xgb backtest report")
     parser.add_argument("--ohlcv", help="含 timestamp/open/high/low/close 的 OHLCV 檔案")
     parser.add_argument("--ohlcv-db", default="storage/market_data.db", help="儲存 OHLCV 的 SQLite 路徑")
-    parser.add_argument("--lookback-days", type=int, default=365, help="讀取資料的天數視窗")
+    parser.add_argument("--lookback-days", type=int, default=360, help="讀取資料的天數視窗")
     parser.add_argument("--output", default="reports/star_xgb_report.html", help="輸出的 HTML 檔案路徑")
     parser.add_argument("--start", help="起始時間 (ISO 格式)")
     parser.add_argument("--end", help="結束時間 (ISO 格式)")
@@ -477,6 +484,25 @@ def main() -> None:
         )
         if args.dataset == "all":
             metrics_df["dataset"] = "all"
+
+    period_start: Optional[pd.Timestamp] = None
+    period_end: Optional[pd.Timestamp] = None
+    if args.dataset != "all":
+        if not metrics_df.empty and {"period_start", "period_end"}.issubset(metrics_df.columns):
+            row = metrics_df.iloc[0]
+            start_val = row.get("period_start")
+            end_val = row.get("period_end")
+            period_start = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
+            period_end = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
+        if (period_start is None or pd.isna(period_start)) and not trades_df.empty:
+            period_start = pd.to_datetime(trades_df["entry_time"], utc=True, errors="coerce").min()
+        if (period_end is None or pd.isna(period_end)) and not trades_df.empty:
+            period_end = pd.to_datetime(trades_df["exit_time"], utc=True, errors="coerce").max()
+        if period_start is not None and pd.notna(period_start):
+            candles = _filter_by_time(candles, "timestamp", period_start, period_end)
+            trades_df = _filter_by_time(trades_df, "entry_time", period_start, period_end)
+            trades_df = _filter_by_time(trades_df, "exit_time", period_start, period_end)
+            equity_df = _filter_by_time(equity_df, "timestamp", period_start, period_end)
 
     if args.dataset == "all" and not metrics_df.empty and not sections:
         if {"period_start", "period_end"}.issubset(metrics_df.columns):

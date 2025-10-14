@@ -147,6 +147,14 @@ def build_trade_overview_figure(
     )
     if equity is not None and not equity.empty:
         equity_sorted = equity.sort_values("timestamp")
+        start_window = candles["timestamp"].min() if candles is not None and not candles.empty else None
+        first_equity_ts = equity_sorted["timestamp"].iloc[0]
+        baseline_ts = first_equity_ts
+        if start_window is not None and start_window < first_equity_ts:
+            baseline_ts = start_window
+        if baseline_ts < first_equity_ts:
+            baseline_row = pd.DataFrame({"timestamp": [baseline_ts], "equity": [equity_sorted["equity"].iloc[0]]})
+            equity_sorted = pd.concat([baseline_row, equity_sorted], ignore_index=True)
         fig.add_trace(
             go.Scatter(
                 x=equity_sorted["timestamp"],
@@ -166,7 +174,8 @@ def build_trade_overview_figure(
             closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True, errors="coerce")
             if show_markers:
                 _add_trade_markers(fig, closed, row=1, col=1)
-            width_default = _estimate_bar_width(closed, candles)
+            candle_width_ms = _estimate_bar_width(None, candles)
+            width_default = candle_width_ms * 0.8 if candle_width_ms else 60_000.0
             bar_centers = closed["exit_time"].fillna(closed["entry_time"])
             returns = closed["return"].fillna(0.0)
             widths = closed.get("bar_width_ms")
@@ -209,12 +218,21 @@ def build_trade_overview_figure(
             "zoomOutY",
         ],
         margin=dict(t=60, b=60, l=60, r=60),
-        xaxis=dict(rangeslider=dict(visible=True, thickness=0.12, bgcolor="#f8fafc")),
+        xaxis=dict(
+            rangeslider=dict(visible=True, thickness=0.12, bgcolor="#f8fafc"),
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikecolor="#1f2937",
+            spikethickness=1,
+        ),
+        hovermode="x unified",
+        spikedistance=-1,
     )
     fig.update_yaxes(domain=[0.45, 1], title_text="Price", row=1, col=1, secondary_y=False, fixedrange=False)
     fig.update_yaxes(domain=[0.45, 1], title_text="Equity", row=1, col=1, secondary_y=True, fixedrange=False)
     fig.update_yaxes(domain=[0, 0.28], title_text="Return", row=2, col=1, fixedrange=False)
-    fig.update_xaxes(title_text="Time", row=2, col=1)
+    fig.update_xaxes(title_text="Time", row=2, col=1, showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="#1f2937", spikethickness=1)
     return fig
 
 
