@@ -198,6 +198,9 @@ def _build_equity_from_trades(trades: pd.DataFrame) -> pd.DataFrame:
 def _run_backtest_from_params(
     candles: pd.DataFrame,
     args: argparse.Namespace,
+    *,
+    transaction_cost: float,
+    stop_loss_pct: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Mapping[str, object] | None]:
     """使用儲存參數重新運行回測，補齊交易與績效資料。"""
     if candles.empty or not args.params_db:
@@ -236,7 +239,8 @@ def _run_backtest_from_params(
         class_means=list(class_means),
         class_thresholds=dict(class_thresholds),
         feature_columns=list(feature_columns),
-        transaction_cost=0.001,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
     trades = result.trades.copy()
     if not trades.empty:
@@ -380,6 +384,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
     parser.add_argument("--title", default=TITLE_DEFAULT, help="報表標題")
+    parser.add_argument("--rerun-backtest", action="store_true", help="即使資料庫已有資料也重新回測一次")
+    parser.add_argument("--transaction-cost", type=float, default=0.0, help="回測時計入的手續費比例（例如 0.001 代表 0.1%）")
+    parser.add_argument("--stop-loss-pct", type=float, default=0.005, help="回測時套用的停損百分比（例如 0.005 代表 0.5%）")
     return parser.parse_args()
 
 
@@ -405,6 +412,7 @@ def main() -> None:
         raise SystemExit("無法取得 K 線資料，請確認輸入來源。")
 
     sections: List[Mapping[str, object]] = []
+    force_rerun = bool(args.rerun_backtest)
 
     if args.dataset == "all":
         trade_frames: List[pd.DataFrame] = []
@@ -440,20 +448,47 @@ def main() -> None:
 
     equity_df = _build_equity_from_trades(trades_df)
 
+    reference_start: Optional[pd.Timestamp] = None
+    reference_end: Optional[pd.Timestamp] = None
+    if args.dataset != "all":
+        if not metrics_df.empty and {"period_start", "period_end"}.issubset(metrics_df.columns):
+            _ref_row = metrics_df.iloc[0]
+            _ref_start = _ref_row.get("period_start")
+            _ref_end = _ref_row.get("period_end")
+            reference_start = pd.to_datetime(_ref_start, utc=True, errors="coerce") if _ref_start is not None else None
+            reference_end = pd.to_datetime(_ref_end, utc=True, errors="coerce") if _ref_end is not None else None
+        if (reference_start is None or pd.isna(reference_start)) and not trades_df.empty:
+            reference_start = pd.to_datetime(trades_df["entry_time"], utc=True, errors="coerce").min()
+        if (reference_end is None or pd.isna(reference_end)) and not trades_df.empty:
+            reference_end = pd.to_datetime(trades_df["exit_time"], utc=True, errors="coerce").max()
+
     params_dict: Optional[Mapping[str, object]] = None
-    if trades_df.empty or metrics_df.empty:
-        print("交易或績效資料不足，改以儲存參數重新回測生成報表內容...")
-        bt_trades, bt_equity, bt_metrics, params_from_bt = _run_backtest_from_params(candles, args)
-        if trades_df.empty:
+    if force_rerun or trades_df.empty or metrics_df.empty:
+        if force_rerun and not (trades_df.empty and metrics_df.empty):
+            print("強制重新回測...")
+        else:
+            print("資料不足，改以儲存參數重新回測生成報表內容...")
+        bt_candles = candles
+        if (reference_start is not None or reference_end is not None) and args.start is None and args.end is None:
+            bt_candles = _filter_by_time(candles, "timestamp", reference_start, reference_end)
+            if bt_candles.empty:
+                bt_candles = candles
+        bt_trades, bt_equity, bt_metrics, params_from_bt = _run_backtest_from_params(
+            bt_candles,
+            args,
+            transaction_cost=args.transaction_cost,
+            stop_loss_pct=args.stop_loss_pct,
+        )
+        if force_rerun or trades_df.empty:
             trades_df = bt_trades
             trades_df = _filter_by_time(trades_df, "entry_time", start_ts, end_ts)
             trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
             if args.dataset == "all" and not trades_df.empty:
                 trades_df["dataset"] = trades_df.get("dataset", "all")
-        if equity_df.empty:
+        if force_rerun or equity_df.empty:
             equity_df = bt_equity
             equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
-        if metrics_df.empty:
+        if force_rerun or metrics_df.empty:
             metrics_df = bt_metrics
             if args.dataset == "all" and not metrics_df.empty:
                 metrics_df["dataset"] = metrics_df.get("dataset", "all")

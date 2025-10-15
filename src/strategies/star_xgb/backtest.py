@@ -37,6 +37,7 @@ def _build_signal_records(
     timeframe: str,
     *,
     transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = None,
 ) -> pd.DataFrame:
     """從模型預測中建立交易記錄。"""
     if dataset.empty:
@@ -57,6 +58,7 @@ def _build_signal_records(
         pred_class,
         model_params,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
     return trades
 
@@ -88,6 +90,7 @@ def backtest_star_xgb(
     feature_columns: Optional[List[str]] = None,
     *,
     transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = 0.005,
 ) -> StarBacktestResult:
     """
     執行 star_xgb 策略的端到端回測。
@@ -139,6 +142,7 @@ def backtest_star_xgb(
         model_params,
         class_means_arr,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     trades = _build_signal_records(
@@ -150,6 +154,7 @@ def backtest_star_xgb(
         class_means,
         timeframe,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     equity_curve = _build_equity_curve(trades)

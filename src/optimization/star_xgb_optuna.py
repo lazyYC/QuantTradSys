@@ -32,6 +32,7 @@ RESULT_GUARD_DIR = Path("storage/optuna_result_flags")
 
 TRANSACTION_COST = 0.001
 MIN_VALIDATION_DAYS = 30
+STOP_LOSS_PCT = 0.005
 
 
 @dataclass
@@ -174,6 +175,7 @@ def optimize_star_xgb(
                     valid_days=MIN_VALIDATION_DAYS,
                     transaction_cost=TRANSACTION_COST,
                     min_validation_days=MIN_VALIDATION_DAYS,
+                    stop_loss_pct=STOP_LOSS_PCT,
                 )
             except ValueError as exc:
                 raise optuna.TrialPruned(str(exc)) from exc
@@ -211,6 +213,7 @@ def optimize_star_xgb(
         valid_days=0,  # 使用全部訓練資料
         transaction_cost=TRANSACTION_COST,
         min_validation_days=MIN_VALIDATION_DAYS,
+        stop_loss_pct=STOP_LOSS_PCT,
     )
 
     inner_validation_days = max(
@@ -233,6 +236,7 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         transaction_cost=TRANSACTION_COST,
+        stop_loss_pct=STOP_LOSS_PCT,
     )
 
     valid_bt_result = backtest_star_xgb(
@@ -245,6 +249,7 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         transaction_cost=TRANSACTION_COST,
+        stop_loss_pct=STOP_LOSS_PCT,
     )
 
     test_bt_result = backtest_star_xgb(
@@ -257,6 +262,7 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         transaction_cost=TRANSACTION_COST,
+        stop_loss_pct=STOP_LOSS_PCT,
     )
 
     # 儲存結果

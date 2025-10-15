@@ -45,6 +45,7 @@ def _simulate_trades(
     params: StarModelParams,
     *,
     transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = None,
 ) -> pd.DataFrame:
     """依據預測類別與預期報酬模擬交易，回傳完整交易表。"""
     trade_columns = [
@@ -86,12 +87,22 @@ def _simulate_trades(
         if open_trade is not None:
             side = open_trade["side"]
             exit_signal = False
+            stop_triggered = False
+            if stop_loss_pct is not None and stop_loss_pct > 0.0:
+                entry_price = open_trade["entry_price"]
+                if side == "LONG":
+                    unrealized = (close_price - entry_price) / entry_price
+                else:
+                    unrealized = (entry_price - close_price) / entry_price
+                if unrealized <= -stop_loss_pct:
+                    stop_triggered = True
+
             if side == "LONG":
                 exit_signal = predicted_class in {0.0, -1.0, -2.0}
             elif side == "SHORT":
                 exit_signal = predicted_class in {0.0, 1.0, 2.0}
 
-            if exit_signal:
+            if stop_triggered or exit_signal:
                 entry_price = open_trade["entry_price"]
                 if side == "LONG":
                     ret = (close_price - entry_price) / entry_price
@@ -113,10 +124,12 @@ def _simulate_trades(
                         "exit_expected_return": expected_ret,
                         "entry_class": open_trade["entry_class"],
                         "exit_class": predicted_class,
-                        "exit_reason": "signal_reversal",
+                        "exit_reason": "stop_loss" if stop_triggered else "signal_reversal",
                     }
                 )
                 open_trade = None
+                if stop_triggered:
+                    continue
 
         if open_trade is None and expected_ret >= threshold:
             if predicted_class == 2.0:
@@ -310,6 +323,7 @@ def _evaluate(
     class_means: np.ndarray,
     *,
     transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = None,
 ) -> Dict[str, float]:
     if df.empty:
         metrics = {
@@ -334,6 +348,7 @@ def _evaluate(
         pred_classes,
         params,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
     summary = _summarize_trades(trades)
 
@@ -376,6 +391,7 @@ def train_star_model(
     valid_days: int = 30,
     transaction_cost: float = 0.0,
     min_validation_days: int = 30,
+    stop_loss_pct: Optional[float] = None,
 ) -> StarTrainingResult:
     """針對單一指標參數搜尋最佳模型。"""
     if dataset.empty:
@@ -410,6 +426,7 @@ def train_star_model(
             model_params,
             class_means,
             transaction_cost=transaction_cost,
+            stop_loss_pct=stop_loss_pct,
         )
         score = _score_metric(metrics)
         record = {
@@ -444,6 +461,7 @@ def train_star_model(
         best_model_params,
         class_means,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
     valid_probs = (
         final_model.predict_proba(valid_df[feature_cols]) if not valid_df.empty else np.empty((0, NUM_CLASSES))
@@ -454,6 +472,7 @@ def train_star_model(
         best_model_params,
         class_means,
         transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     model_dir.mkdir(parents=True, exist_ok=True)
