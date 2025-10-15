@@ -6,9 +6,11 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Optional
+from datetime import datetime, timezone
 
 import pandas as pd
 from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from notifier.dispatcher import dispatch_signal
@@ -135,7 +137,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _configure_logging(args.log_path)
-    scheduler = BlockingScheduler()
+    scheduler = BlockingScheduler(timezone="UTC")
 
     def _job_wrapper() -> None:
         try:
@@ -151,8 +153,21 @@ def main() -> None:
         except Exception as exc:
             LOGGER.exception("star_xgb realtime cycle failed: %s", exc)
 
-    scheduler.add_job(_job_wrapper, "interval", minutes=args.interval_minutes, next_run_time=pd.Timestamp.utcnow())
-    LOGGER.info("Starting star_xgb scheduler | strategy=%s symbol=%s timeframe=%s interval=%sm", args.strategy, args.symbol, args.timeframe, args.interval_minutes)
+    if args.interval_minutes <= 0:
+        raise SystemExit("interval-minutes must be positive")
+
+    trigger = CronTrigger(second=0, minute=f"*/{args.interval_minutes}", timezone="UTC")
+    scheduler.add_job(_job_wrapper, trigger=trigger)
+
+    next_fire = trigger.get_next_fire_time(None, datetime.now(timezone.utc))
+    LOGGER.info(
+        "Starting star_xgb scheduler | strategy=%s symbol=%s timeframe=%s interval=%sm | next_run=%s",
+        args.strategy,
+        args.symbol,
+        args.timeframe,
+        args.interval_minutes,
+        next_fire.isoformat() if next_fire else "N/A",
+    )
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
