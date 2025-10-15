@@ -55,6 +55,19 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
         LOGGER.warning("ALPACA_ORDER_RATIO is non-positive; trading skipped")
         return 0.0
 
+    ratio_raw = os.getenv("ALPACA_ORDER_RATIO", "0.97")
+    try:
+        order_ratio = max(min(float(ratio_raw), 1.0), 0.0)
+    except ValueError:
+        order_ratio = 0.97
+    max_notional_raw = os.getenv("ALPACA_MAX_ORDER_NOTIONAL", "200000")
+    try:
+        max_notional = float(max_notional_raw)
+    except ValueError:
+        max_notional = 200000.0
+    if max_notional <= 0:
+        max_notional = None
+
     for key in ("buying_power", "cash"):
         value = account.get(key)
         if value is None:
@@ -64,7 +77,15 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
         except (TypeError, ValueError):
             continue
         if amount > 0:
-            return amount * order_ratio
+            notional = amount * order_ratio
+            if max_notional is not None and notional > max_notional:
+                LOGGER.debug(
+                    "Clamping order notional from %.2f to %.2f based on ALPACA_MAX_ORDER_NOTIONAL",
+                    notional,
+                    max_notional,
+                )
+                notional = max_notional
+            return notional
     return 0.0
 
 
@@ -167,17 +188,18 @@ def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
     return _ALPACA_CLIENT
 
 
-def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]) -> None:
+def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]) -> bool:
     symbol = _normalize_symbol(str(context.get("symbol", "")))
     action_upper = action.upper()
+    success = False
     try:
         if action_upper == "ENTER_LONG":
             notional = _resolve_order_notional(client)
             if notional <= 0:
                 LOGGER.warning("Alpaca trading skipped: no buying power available")
-                return
+                return False
             if not _is_price_within_tolerance(context, client, symbol):
-                return
+                return False
             client.submit_order(
                 symbol=symbol,
                 side="buy",
@@ -186,16 +208,22 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
                 time_in_force="gtc",
             )
             LOGGER.info("Submitted Alpaca LONG order | symbol=%s notional=%.2f", symbol, notional)
+            success = True
         elif action_upper == "EXIT_LONG":
-            client.close_position(symbol, side="sell")
+            try:
+                client.close_position(symbol, side="sell")
+            except AlpacaAPIError as exc:
+                LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
+                return False
             LOGGER.info("Closed Alpaca LONG position | symbol=%s", symbol)
+            success = True
         elif action_upper == "ENTER_SHORT":
             notional = _resolve_order_notional(client)
             if notional <= 0:
                 LOGGER.warning("Alpaca trading skipped: no buying power available for short")
-                return
+                return False
             if not _is_price_within_tolerance(context, client, symbol):
-                return
+                return False
             client.submit_order(
                 symbol=symbol,
                 side="sell",
@@ -204,13 +232,25 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
                 time_in_force="gtc",
             )
             LOGGER.info("Submitted Alpaca SHORT order | symbol=%s notional=%.2f", symbol, notional)
+            success = True
         elif action_upper == "EXIT_SHORT":
-            client.close_position(symbol, side="buy")
+            try:
+                client.close_position(symbol, side="buy")
+            except AlpacaAPIError as exc:
+                LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
+                return False
             LOGGER.info("Closed Alpaca SHORT position | symbol=%s", symbol)
+            success = True
+        else:
+            LOGGER.debug("Unknown trading action %s; skipping", action)
+            return False
     except AlpacaAPIError as exc:
         LOGGER.error("Alpaca API error while handling %s: %s", action_upper, exc)
+        return False
     except Exception as exc:  # noqa: BLE001
         LOGGER.error("Unexpected error while handling %s: %s", action_upper, exc)
+        return False
+    return success
 
 
 def dispatch_signal(
