@@ -12,3 +12,4 @@ seaborn
 plotly
 optuna
 lightgbm
+websocket-client

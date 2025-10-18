@@ -1,22 +1,27 @@
-"""啟動 star_xgb 策略的即時訊號排程。"""
+"""Realtime engine for star_xgb strategy driven by Binance WebSocket closed klines."""
 from __future__ import annotations
 
 import argparse
 import logging
+import threading
+import time
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict, Optional
-from datetime import datetime, timezone
 
 import pandas as pd
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
 
-from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
+from data_pipeline.binance_ws import BinanceKlineSubscriber
+from data_pipeline.ccxt_fetcher import (
+    ensure_database,
+    fetch_yearly_ohlcv,
+    upsert_ohlcv_rows,
+)
 from notifier.dispatcher import dispatch_signal
-from persistence.param_store import StrategyRecord, load_strategy_params
+from persistence.param_store import load_strategy_params
 from persistence.runtime_store import load_runtime_state, save_runtime_state
-from strategies.data_utils import prepare_ohlcv_frame
+from strategies.data_utils import prepare_ohlcv_frame, timeframe_to_offset
 from strategies.star_xgb.features import StarFeatureCache
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
 from strategies.star_xgb.runtime import StarRuntimeState, generate_realtime_signal, load_star_model
@@ -25,6 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_LOG_PATH = Path("storage/logs/star_xgb_scheduler.log")
 DEFAULT_STATE_DB = Path("storage/strategy_state.db")
+DEFAULT_MARKET_DB = Path("storage/market_data.db")
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
@@ -44,134 +50,243 @@ def _configure_logging(log_path: Path) -> None:
     root.addHandler(console)
 
 
-def run_star_cycle(
-    symbol: str,
-    timeframe: str,
-    strategy: str,
-    # *,
-    lookback_days: int,
-    params_store_path: Path,
-    state_store_path: Path,
-    exchange: str,
-    exchange_config: Optional[Dict] = None,
-) -> Dict[str, object]:
-    record = load_strategy_params(params_store_path, strategy, symbol, timeframe)
-    if record is None or not isinstance(record.params, dict):
-        LOGGER.warning("策略 %s 的參數不存在或格式不正確。", strategy)
-        return {"action": "HOLD", "reason": "missing_params"}
+def _safe_concat(base: pd.DataFrame, row: pd.DataFrame, max_rows: int) -> pd.DataFrame:
+    if base.empty:
+        result = row.reset_index(drop=True)
+    else:
+        if base["timestamp"].iloc[-1] == row["timestamp"].iloc[0]:
+            base = base.copy()
+            base.iloc[-1] = row.iloc[0]
+            result = base
+        else:
+            result = pd.concat([base, row], ignore_index=True)
+    if max_rows and len(result) > max_rows:
+        result = result.iloc[-max_rows:].reset_index(drop=True)
+    return result
 
-    payload = record.params
-    indicator_payload = payload.get("indicator")
-    model_payload = payload.get("model")
-    model_path = payload.get("model_path")
-    feature_columns = payload.get("feature_columns")
-    class_means = payload.get("class_means")
 
-    if not all([indicator_payload, model_payload, model_path, feature_columns, class_means]):
-        LOGGER.warning("策略 %s 的參數不完整。", strategy)
-        return {"action": "HOLD", "reason": "incomplete_params"}
+class StarRealtimeEngine:
+    """Manage WebSocket ingestion and strategy evaluation."""
 
-    indicator = StarIndicatorParams(**indicator_payload)
-    model_params = StarModelParams(**model_payload)
-    booster = load_star_model(model_path)
+    def __init__(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        strategy: str,
+        lookback_days: int,
+        params_store_path: Path,
+        state_store_path: Path,
+        market_db_path: Path,
+        exchange: str,
+        exchange_config: Optional[Dict] = None,
+    ) -> None:
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.strategy = strategy
+        self.lookback_days = lookback_days
+        self.params_store_path = params_store_path
+        self.state_store_path = state_store_path
+        self.market_db_path = market_db_path
+        self.exchange = exchange
+        self.exchange_config = exchange_config
 
-    raw_df = fetch_yearly_ohlcv(
-        symbol=symbol,
-        timeframe=timeframe,
-        lookback_days=lookback_days,
-        exchange_id=exchange,
-        exchange_config=exchange_config,
-        prune_history=False,
-    )
-    cleaned = prepare_ohlcv_frame(raw_df, timeframe)
-    if cleaned.empty:
-        LOGGER.warning("無法取得 %s %s 的 OHLCV 資料。", symbol, timeframe)
-        return {"action": "HOLD", "reason": "empty_data"}
+        record = load_strategy_params(self.params_store_path, strategy, symbol, timeframe)
+        if record is None or not isinstance(record.params, dict):
+            raise RuntimeError(f"策略 {strategy} 缺少已儲存參數")
 
-    runtime_record = load_runtime_state(state_store_path, strategy, symbol, timeframe)
-    runtime_state = StarRuntimeState.from_dict(runtime_record.state if runtime_record else None)
+        payload = record.params
+        indicator_payload = payload.get("indicator")
+        model_payload = payload.get("model")
+        model_path = payload.get("model_path")
+        feature_columns = payload.get("feature_columns")
+        class_means = payload.get("class_means")
+        if not all([indicator_payload, model_payload, model_path, feature_columns, class_means]):
+            raise RuntimeError(f"策略 {strategy} 儲存參數不完整")
 
-    cache = StarFeatureCache(
-        cleaned,
-        trend_windows=[indicator.trend_window],
-        atr_windows=[indicator.atr_window],
-        volatility_windows=[indicator.volatility_window],
-        volume_windows=[indicator.volume_window],
-        pattern_windows=[indicator.pattern_lookback],
-    )
+        self.indicator = StarIndicatorParams(**indicator_payload)
+        self.model_params = StarModelParams(**model_payload)
+        self.feature_columns = feature_columns
+        self.class_means = class_means
+        self.model = load_star_model(model_path)
 
-    raw_action, context, new_state = generate_realtime_signal(
-        df=cleaned, 
-        indicator_params=indicator, 
-        model_params=model_params, 
-        model=booster, 
-        feature_columns=feature_columns, 
-        class_means=class_means, 
-        cache=cache, 
-        state=runtime_state
-    )
-    colored_action = f"{YELLOW}{raw_action}{RESET}"
-    context.update({"strategy": strategy, "symbol": symbol, "timeframe": timeframe})
-    LOGGER.info("star_xgb action=%s details=%s", colored_action, context)
+        runtime_record = load_runtime_state(self.state_store_path, strategy, symbol, timeframe)
+        self.runtime_state = StarRuntimeState.from_dict(runtime_record.state if runtime_record else None)
 
-    if raw_action != "HOLD":
-        dispatch_signal(raw_action, context)
+        LOGGER.info("初始化 OHLCV 資料 (REST)")
+        raw_df = fetch_yearly_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe,
+            lookback_days=lookback_days,
+            exchange_id=exchange,
+            exchange_config=exchange_config,
+            prune_history=False,
+            db_path=market_db_path,
+        )
+        prepared = prepare_ohlcv_frame(raw_df, timeframe)
+        if prepared.empty:
+            raise RuntimeError(f"{symbol} {timeframe} 無歷史 OHLCV 資料")
 
-    if new_state != runtime_state:
-        save_runtime_state(state_store_path, strategy, symbol, timeframe, state=new_state.to_dict())
-    
-    return {"action": raw_action, "context": context, "state": new_state.to_dict()}
+        self.data_lock = threading.Lock()
+        self.db_conn = ensure_database(market_db_path)
+
+        if len(prepared) > 1:
+            last_row = prepared.iloc[-1]
+            last_ts_ms = int(last_row["timestamp"].timestamp() * 1000)
+            prepared = prepared.iloc[:-1].reset_index(drop=True)
+            with self.db_conn:
+                self.db_conn.execute(
+                    "DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts = ?",
+                    (self.symbol, self.timeframe, last_ts_ms),
+                )
+
+        self.price_df = prepared.reset_index(drop=True)
+
+        bars_per_day = int(pd.Timedelta(days=1) / timeframe_to_offset(timeframe))
+        self.max_rows = max(int(lookback_days * bars_per_day * 1.1), len(self.price_df))
+
+        self.subscriber: Optional[BinanceKlineSubscriber] = None
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+
+    def start(self) -> None:
+        LOGGER.info(
+            "啟動 star_xgb websocket 引擎 | strategy=%s symbol=%s timeframe=%s lookback=%sd",
+            self.strategy,
+            self.symbol,
+            self.timeframe,
+            self.lookback_days,
+        )
+        self._evaluate("initial")
+
+        self.subscriber = BinanceKlineSubscriber(
+            symbol=self.symbol,
+            timeframe=self.timeframe,
+            on_closed_kline=self._handle_closed_kline,
+        )
+        self.subscriber.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            LOGGER.info("收到中斷訊號，準備關閉...")
+        finally:
+            if self.subscriber:
+                self.subscriber.stop()
+            self.db_conn.close()
+            LOGGER.info("star_xgb websocket 引擎已關閉")
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _handle_closed_kline(self, kline: dict) -> None:
+        ts_open = int(kline["t"])
+        open_ = float(kline["o"])
+        high = float(kline["h"])
+        low = float(kline["l"])
+        close = float(kline["c"])
+        volume = float(kline["v"])
+        ts = datetime.fromtimestamp(ts_open / 1000, tz=timezone.utc)
+        iso_ts = ts.isoformat().replace("+00:00", "Z")
+
+        row_df = pd.DataFrame(
+            {
+                "timestamp": [ts],
+                "open": [open_],
+                "high": [high],
+                "low": [low],
+                "close": [close],
+                "volume": [volume],
+            }
+        )
+
+        with self.data_lock:
+            self.price_df = _safe_concat(self.price_df, row_df, self.max_rows)
+            upsert_ohlcv_rows(
+                self.db_conn,
+                self.symbol,
+                self.timeframe,
+                [(ts_open, iso_ts, open_, high, low, close, volume)],
+            )
+        LOGGER.info("收到封棒: %s close=%s volume=%s", ts.isoformat(), close, volume)
+        self._evaluate("websocket")
+
+    def _evaluate(self, source: str) -> None:
+        with self.data_lock:
+            df = self.price_df.copy()
+        cache = StarFeatureCache(
+            df,
+            trend_windows=[self.indicator.trend_window],
+            atr_windows=[self.indicator.atr_window],
+            volatility_windows=[self.indicator.volatility_window],
+            volume_windows=[self.indicator.volume_window],
+            pattern_windows=[self.indicator.pattern_lookback],
+        )
+        action, context, new_state = generate_realtime_signal(
+            df=df,
+            indicator_params=self.indicator,
+            model_params=self.model_params,
+            model=self.model,
+            feature_columns=self.feature_columns,
+            class_means=self.class_means,
+            cache=cache,
+            state=self.runtime_state,
+        )
+        context.update(
+            {
+                "strategy": self.strategy,
+                "symbol": self.symbol,
+                "timeframe": self.timeframe,
+                "source": source,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        colored_action = f"{YELLOW}{action}{RESET}"
+        LOGGER.info("star_xgb action=%s details=%s", colored_action, context)
+        if action != "HOLD":
+            dispatch_signal(action, context)
+
+        if new_state != self.runtime_state:
+            save_runtime_state(
+                self.state_store_path,
+                self.strategy,
+                self.symbol,
+                self.timeframe,
+                state=new_state.to_dict(),
+            )
+            self.runtime_state = new_state
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="star_xgb realtime scheduler")
+    parser = argparse.ArgumentParser(description="star_xgb realtime engine (websocket driven)")
     parser.add_argument("--symbol", type=str, default="BTC/USDT")
     parser.add_argument("--timeframe", type=str, default="5m")
-    parser.add_argument("--strategy", type=str, default="star_xgb_default", help="策略名稱 (同 study name)")
-    parser.add_argument("--lookback-days", type=int, default=30) # 即時訊號不需要太長的歷史
-    parser.add_argument("--interval-minutes", type=int, default=5)
+    parser.add_argument("--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)")
+    parser.add_argument("--lookback-days", type=int, default=30, help="初始化時載入的歷史天數")
     parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
     parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
+    parser.add_argument("--ohlcv-db", type=Path, default=DEFAULT_MARKET_DB)
     parser.add_argument("--exchange", type=str, default="binance")
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
     args = parser.parse_args()
 
     _configure_logging(args.log_path)
-    scheduler = BlockingScheduler(timezone="UTC")
 
-    def _job_wrapper() -> None:
-        try:
-            run_star_cycle(
-                symbol=args.symbol,
-                timeframe=args.timeframe,
-                strategy=args.strategy,
-                lookback_days=args.lookback_days,
-                params_store_path=args.params_db,
-                state_store_path=args.state_db,
-                exchange=args.exchange,
-            )
-        except Exception as exc:
-            LOGGER.exception("star_xgb realtime cycle failed: %s", exc)
-
-    if args.interval_minutes <= 0:
-        raise SystemExit("interval-minutes must be positive")
-
-    trigger = CronTrigger(second=0, minute=f"*/{args.interval_minutes}", timezone="UTC")
-    scheduler.add_job(_job_wrapper, trigger=trigger)
-
-    next_fire = trigger.get_next_fire_time(None, datetime.now(timezone.utc))
-    LOGGER.info(
-        "Starting star_xgb scheduler | strategy=%s symbol=%s timeframe=%s interval=%sm | next_run=%s",
-        args.strategy,
-        args.symbol,
-        args.timeframe,
-        args.interval_minutes,
-        next_fire.isoformat() if next_fire else "N/A",
+    engine = StarRealtimeEngine(
+        symbol=args.symbol,
+        timeframe=args.timeframe,
+        strategy=args.strategy,
+        lookback_days=args.lookback_days,
+        params_store_path=args.params_db,
+        state_store_path=args.state_db,
+        market_db_path=args.ohlcv_db,
+        exchange=args.exchange,
     )
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        LOGGER.info("Scheduler stopped")
+    engine.start()
 
 
 if __name__ == "__main__":
