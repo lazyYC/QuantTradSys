@@ -133,6 +133,7 @@ def main() -> None:
         default=DEFAULT_LOG_PATH,
         help="排程器寫入的日誌檔路徑",
     )
+    parser.add_argument("--start-lag-seconds", type=float, default=1.0, help="每次排程執行前延遲秒數，避免行情尚未更新")
     args = parser.parse_args()
 
     _configure_logging(args.log_file)
