@@ -97,7 +97,8 @@ def generate_realtime_signal(
         return "HOLD", {"reason": "insufficient_features"}, runtime_state
 
     latest = features.iloc[-1]
-    feature_vector = latest.reindex(feature_columns).fillna(0.0)
+    feature_vector = latest.reindex(feature_columns)
+    feature_vector = pd.to_numeric(feature_vector, errors="coerce").fillna(0.0)
     probs = model.predict(feature_vector.to_numpy(dtype=float).reshape(1, -1))
     class_means_arr = np.asarray(class_means, dtype=float)
     if class_means_arr.size != len(CLASS_VALUES):
