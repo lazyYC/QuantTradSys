@@ -115,9 +115,6 @@ def generate_realtime_signal(
         "price": price,
         "expected_return": expected_return,
         "predicted_class": int(pred_class),
-        "upper_shadow_ratio": latest.get("upper_shadow_ratio"),
-        "body_ratio": latest.get("body_ratio"),
-        "volume_ratio": latest.get("volume_ratio"),
     }
 
     # 先檢查是否需要平倉
