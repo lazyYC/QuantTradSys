@@ -130,16 +130,6 @@ class StarRealtimeEngine:
         self.data_lock = threading.Lock()
         self.db_conn = ensure_database(market_db_path)
 
-        if len(prepared) > 1:
-            last_row = prepared.iloc[-1]
-            last_ts_ms = int(last_row["timestamp"].timestamp() * 1000)
-            prepared = prepared.iloc[:-1].reset_index(drop=True)
-            with self.db_conn:
-                self.db_conn.execute(
-                    "DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts = ?",
-                    (self.symbol, self.timeframe, last_ts_ms),
-                )
-
         self.price_df = prepared.reset_index(drop=True)
 
         bars_per_day = int(pd.Timedelta(days=1) / timeframe_to_offset(timeframe))

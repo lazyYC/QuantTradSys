@@ -119,7 +119,7 @@ def save_dataframe(df: pd.DataFrame, path: Path) -> Path:
 def ensure_database(db_path: Path) -> sqlite3.Connection:
     """建立 SQLite 資料庫連線並確保表結構存在。"""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     with conn:
@@ -257,18 +257,26 @@ def fetch_yearly_ohlcv(
     lookback = timedelta(days=lookback_days)
     window_start_ms = calculate_since(utc_now, lookback)
     timeframe_ms = timeframe_to_milliseconds(timeframe)
+    ongoing_open_ms = (end_timestamp // timeframe_ms) * timeframe_ms
 
     conn: Optional[sqlite3.Connection] = None
     if db_path is not None:
         conn = ensure_database(db_path)
         last_ts = latest_timestamp(conn, symbol, timeframe)
         LOGGER.debug("Last stored timestamp: %s", last_ts)
+        with conn:
+            conn.execute(
+                "DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts >= ?",
+                (symbol, timeframe, ongoing_open_ms),
+            )
         since_ms = max(window_start_ms, (last_ts + timeframe_ms) if last_ts is not None else window_start_ms)
     else:
         since_ms = window_start_ms
 
     if since_ms <= end_timestamp:
         new_rows = fetch_ohlcv_batches(exchange, symbol, timeframe, since_ms, utc_now)
+        if new_rows:
+            new_rows = [row for row in new_rows if int(row[0]) < ongoing_open_ms]
     else:
         LOGGER.info("No new candles required for %s %s", symbol, timeframe)
         new_rows = []
@@ -284,6 +292,10 @@ def fetch_yearly_ohlcv(
         conn.close()
     else:
         df = build_dataframe(new_rows)
+
+    if not df.empty:
+        cutoff_ts = pd.to_datetime(ongoing_open_ms, unit="ms", utc=True)
+        df = df[df["timestamp"] < cutoff_ts].reset_index(drop=True)
 
     if output_path and not df.empty:
         save_dataframe(df, output_path)
