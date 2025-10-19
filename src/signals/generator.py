@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Sequence
 
 import pandas as pd
@@ -13,7 +13,9 @@ Scorer = Callable[[pd.Series], Optional[Dict[str, Any]]]
 Resolver = Callable[..., Decision]
 
 
-def apply_feature_steps(df: pd.DataFrame, feature_steps: Iterable[FeatureStep]) -> pd.DataFrame:
+def apply_feature_steps(
+    df: pd.DataFrame, feature_steps: Iterable[FeatureStep]
+) -> pd.DataFrame:
     """依序套用特徵工程步驟，維持函數式管線的可組合性。"""
     transformed = df.copy()
     for step in feature_steps:
@@ -21,7 +23,9 @@ def apply_feature_steps(df: pd.DataFrame, feature_steps: Iterable[FeatureStep]) 
     return transformed
 
 
-def normalise_evaluation(raw_eval: Dict[str, Any], default_weight: float = 1.0) -> Dict[str, Any]:
+def normalise_evaluation(
+    raw_eval: Dict[str, Any], default_weight: float = 1.0
+) -> Dict[str, Any]:
     """統一評分結果格式，確保解析器可以正確計算。"""
     evaluation = {
         "name": raw_eval.get("name", "unknown"),
@@ -47,7 +51,9 @@ def weighted_vote_resolver(
         if decision not in score_board:
             LOGGER.warning("Unknown decision %s encountered", decision)
             continue
-        score_board[decision] += evaluation.get("weight", 1.0) * evaluation.get("confidence", 0.0)
+        score_board[decision] += evaluation.get("weight", 1.0) * evaluation.get(
+            "confidence", 0.0
+        )
     best_decision = max(score_board.items(), key=lambda item: item[1])[0]
     if score_board[best_decision] == 0:
         return default_decision
@@ -95,5 +101,3 @@ __all__ = [
     "generate_signal_frame",
     "weighted_vote_resolver",
 ]
-
-

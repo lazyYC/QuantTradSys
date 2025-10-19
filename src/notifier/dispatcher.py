@@ -13,6 +13,122 @@ LOGGER = logging.getLogger(__name__)
 _ALPACA_CLIENT: Optional[AlpacaPaperTradingClient] = None
 
 
+def dispatch_signal(
+    action: str,
+    context: Dict[str, Any],
+    *,
+    env_path: Optional[Path] = None,
+) -> None:
+    """Dispatch strategy signal to external channels."""
+    LOGGER.info("Dispatch signal=%s context=%s", action, context)
+    load_env(env_path or DEFAULT_ENV_PATH)
+    if action.upper() == "HOLD":
+        return
+
+    webhook = os.getenv("DISCORD_WEBHOOK")
+    if webhook:
+        _send_discord(webhook, action, context)
+    else:
+        LOGGER.debug("DISCORD_WEBHOOK not configured, skipping Discord notification")
+
+    client = get_alpaca_client(env_path=env_path)
+    if client is None:
+        LOGGER.debug("Alpaca client unavailable; trading step skipped")
+        return
+    execute_trading(client, action, context)
+
+
+def execute_trading(
+    client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]
+) -> bool:
+    symbol = _normalize_symbol(str(context.get("symbol", "")))
+    action_upper = action.upper()
+    success = False
+    try:
+        if action_upper == "ENTER_LONG":
+            notional = _resolve_order_notional(client)
+            if notional <= 0:
+                LOGGER.warning("Alpaca trading skipped: no buying power available")
+                return False
+            if not _is_price_within_tolerance(context, client, symbol):
+                return False
+            client.submit_order(
+                symbol=symbol,
+                side="buy",
+                notional=notional,
+                order_type="market",
+                time_in_force="gtc",
+            )
+            LOGGER.info(
+                "Submitted Alpaca LONG order | symbol=%s notional=%.2f",
+                symbol,
+                notional,
+            )
+            success = True
+        elif action_upper == "EXIT_LONG":
+            try:
+                client.close_position(symbol, side="sell")
+            except AlpacaAPIError as exc:
+                LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
+                return False
+            LOGGER.info("Closed Alpaca LONG position | symbol=%s", symbol)
+            success = True
+        elif action_upper == "ENTER_SHORT":
+            notional = _resolve_order_notional(client)
+            if notional <= 0:
+                LOGGER.warning(
+                    "Alpaca trading skipped: no buying power available for short"
+                )
+                return False
+            if not _is_price_within_tolerance(context, client, symbol):
+                return False
+            client.submit_order(
+                symbol=symbol,
+                side="sell",
+                notional=notional,
+                order_type="market",
+                time_in_force="gtc",
+            )
+            LOGGER.info(
+                "Submitted Alpaca SHORT order | symbol=%s notional=%.2f",
+                symbol,
+                notional,
+            )
+            success = True
+        elif action_upper == "EXIT_SHORT":
+            try:
+                client.close_position(symbol, side="buy")
+            except AlpacaAPIError as exc:
+                LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
+                return False
+            LOGGER.info("Closed Alpaca SHORT position | symbol=%s", symbol)
+            success = True
+        else:
+            LOGGER.debug("Unknown trading action %s; skipping", action)
+            return False
+    except AlpacaAPIError as exc:
+        LOGGER.error("Alpaca API error while handling %s: %s", action_upper, exc)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.error("Unexpected error while handling %s: %s", action_upper, exc)
+        return False
+    return success
+
+
+def get_alpaca_client(
+    *, env_path: Optional[Path] = None
+) -> Optional[AlpacaPaperTradingClient]:
+    """Return a cached Alpaca client after ensuring environment variables are loaded."""
+    load_env(env_path or DEFAULT_ENV_PATH)
+    return _get_alpaca_client()
+
+
+def get_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
+    """Fetch latest trade price for a trading symbol."""
+    normalized = _normalize_symbol(symbol)
+    return _fetch_latest_price(client, normalized)
+
+
 def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
     message = context.get("message") or f"Signal: {action}\nContext: {context}"
     payload = {"content": message}
@@ -89,7 +205,9 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
     return 0.0
 
 
-def _fetch_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
+def _fetch_latest_price(
+    client: AlpacaPaperTradingClient, symbol: str
+) -> Optional[float]:
     candidates = [
         symbol.upper().replace(" ", ""),
         symbol.upper().replace("/", ""),
@@ -107,7 +225,11 @@ def _fetch_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Option
                 timeout=5,
             )
             if response.status_code >= 400:
-                LOGGER.debug("Alpaca price query failed (%s) for token %s", response.status_code, token)
+                LOGGER.debug(
+                    "Alpaca price query failed (%s) for token %s",
+                    response.status_code,
+                    token,
+                )
                 continue
             payload = response.json()
             trade = payload.get("trades", {}).get(token)
@@ -118,25 +240,17 @@ def _fetch_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Option
                 continue
             return float(price)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to fetch latest price for %s as %s: %s", symbol, token, exc)
+            LOGGER.warning(
+                "Failed to fetch latest price for %s as %s: %s", symbol, token, exc
+            )
             continue
     LOGGER.warning("Unable to obtain latest price for %s from Alpaca", symbol)
     return None
 
 
-def get_alpaca_client(*, env_path: Optional[Path] = None) -> Optional[AlpacaPaperTradingClient]:
-    """Return a cached Alpaca client after ensuring environment variables are loaded."""
-    load_env(env_path or DEFAULT_ENV_PATH)
-    return _get_alpaca_client()
-
-
-def get_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
-    """Fetch latest trade price for a trading symbol."""
-    normalized = _normalize_symbol(symbol)
-    return _fetch_latest_price(client, normalized)
-
-
-def _is_price_within_tolerance(context: Dict[str, Any], client: AlpacaPaperTradingClient, symbol: str) -> bool:
+def _is_price_within_tolerance(
+    context: Dict[str, Any], client: AlpacaPaperTradingClient, symbol: str
+) -> bool:
     signal_price = context.get("price") or context.get("close")
     try:
         signal_price_val = float(signal_price)
@@ -188,94 +302,9 @@ def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
     return _ALPACA_CLIENT
 
 
-def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]) -> bool:
-    symbol = _normalize_symbol(str(context.get("symbol", "")))
-    action_upper = action.upper()
-    success = False
-    try:
-        if action_upper == "ENTER_LONG":
-            notional = _resolve_order_notional(client)
-            if notional <= 0:
-                LOGGER.warning("Alpaca trading skipped: no buying power available")
-                return False
-            if not _is_price_within_tolerance(context, client, symbol):
-                return False
-            client.submit_order(
-                symbol=symbol,
-                side="buy",
-                notional=notional,
-                order_type="market",
-                time_in_force="gtc",
-            )
-            LOGGER.info("Submitted Alpaca LONG order | symbol=%s notional=%.2f", symbol, notional)
-            success = True
-        elif action_upper == "EXIT_LONG":
-            try:
-                client.close_position(symbol, side="sell")
-            except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
-                return False
-            LOGGER.info("Closed Alpaca LONG position | symbol=%s", symbol)
-            success = True
-        elif action_upper == "ENTER_SHORT":
-            notional = _resolve_order_notional(client)
-            if notional <= 0:
-                LOGGER.warning("Alpaca trading skipped: no buying power available for short")
-                return False
-            if not _is_price_within_tolerance(context, client, symbol):
-                return False
-            client.submit_order(
-                symbol=symbol,
-                side="sell",
-                notional=notional,
-                order_type="market",
-                time_in_force="gtc",
-            )
-            LOGGER.info("Submitted Alpaca SHORT order | symbol=%s notional=%.2f", symbol, notional)
-            success = True
-        elif action_upper == "EXIT_SHORT":
-            try:
-                client.close_position(symbol, side="buy")
-            except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
-                return False
-            LOGGER.info("Closed Alpaca SHORT position | symbol=%s", symbol)
-            success = True
-        else:
-            LOGGER.debug("Unknown trading action %s; skipping", action)
-            return False
-    except AlpacaAPIError as exc:
-        LOGGER.error("Alpaca API error while handling %s: %s", action_upper, exc)
-        return False
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Unexpected error while handling %s: %s", action_upper, exc)
-        return False
-    return success
-
-
-def dispatch_signal(
-    action: str,
-    context: Dict[str, Any],
-    *,
-    env_path: Optional[Path] = None,
-) -> None:
-    """Dispatch strategy signal to external channels."""
-    LOGGER.info("Dispatch signal=%s context=%s", action, context)
-    load_env(env_path or DEFAULT_ENV_PATH)
-    if action.upper() == "HOLD":
-        return
-
-    webhook = os.getenv("DISCORD_WEBHOOK")
-    if webhook:
-        _send_discord(webhook, action, context)
-    else:
-        LOGGER.debug("DISCORD_WEBHOOK not configured, skipping Discord notification")
-
-    client = get_alpaca_client(env_path=env_path)
-    if client is None:
-        LOGGER.debug("Alpaca client unavailable; trading step skipped")
-        return
-    execute_trading(client, action, context)
-
-
-__all__ = ["dispatch_signal", "execute_trading", "get_alpaca_client", "get_latest_price"]
+__all__ = [
+    "dispatch_signal",
+    "execute_trading",
+    "get_alpaca_client",
+    "get_latest_price",
+]

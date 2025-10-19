@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Quick dispatcher sanity tests with mocked external services."""
+
 from __future__ import annotations
 
 import os
@@ -25,7 +26,9 @@ class DispatcherTests(TestCase):
 
     @mock.patch("notifier.dispatcher.requests.post")
     @mock.patch("notifier.dispatcher.execute_trading")
-    def test_dispatch_signal_invokes_trading(self, mock_execute: mock.MagicMock, mock_post: mock.MagicMock) -> None:
+    def test_dispatch_signal_invokes_trading(
+        self, mock_execute: mock.MagicMock, mock_post: mock.MagicMock
+    ) -> None:
         dispatcher.dispatch_signal(
             "ENTER_LONG",
             {"symbol": "BTC/USDT", "price": 30000.0},

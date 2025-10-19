@@ -13,7 +13,9 @@ DEFAULT_BASE_URL = "https://paper-api.alpaca.markets"
 class AlpacaAPIError(RuntimeError):
     """Raised when the Alpaca API returns an error response."""
 
-    def __init__(self, status_code: int, message: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, status_code: int, message: str, payload: Optional[Dict[str, Any]] = None
+    ) -> None:
         super().__init__(f"Alpaca API error ({status_code}): {message}")
         self.status_code = status_code
         self.payload = payload or {}
@@ -98,7 +100,9 @@ class AlpacaPaperTradingClient:
         """Retrieve the current position for a symbol, if any."""
         return self._get(f"/v2/positions/{symbol}")
 
-    def close_position(self, symbol: str, *, side: Optional[str] = None) -> Dict[str, Any]:
+    def close_position(
+        self, symbol: str, *, side: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Close an open position. Optional side enforces closing long or short legs."""
         params: Dict[str, Any] = {}
         if side:
@@ -109,16 +113,26 @@ class AlpacaPaperTradingClient:
         """Return account status and balances."""
         return self._get("/v2/account")
 
-    def _get(self, path: str, *, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        response = self._session.get(self._build_url(path), params=params, timeout=self._timeout)
+    def _get(
+        self, path: str, *, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        response = self._session.get(
+            self._build_url(path), params=params, timeout=self._timeout
+        )
         return self._handle_response(response)
 
     def _post(self, path: str, *, json: Dict[str, Any]) -> Dict[str, Any]:
-        response = self._session.post(self._build_url(path), json=json, timeout=self._timeout)
+        response = self._session.post(
+            self._build_url(path), json=json, timeout=self._timeout
+        )
         return self._handle_response(response)
 
-    def _delete(self, path: str, *, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        response = self._session.delete(self._build_url(path), params=params, timeout=self._timeout)
+    def _delete(
+        self, path: str, *, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        response = self._session.delete(
+            self._build_url(path), params=params, timeout=self._timeout
+        )
         return self._handle_response(response)
 
     def _build_url(self, path: str) -> str:

@@ -1,4 +1,4 @@
-﻿import itertools
+import itertools
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,7 +53,6 @@ DEFAULT_GRID = MeanReversionGrid(
 )
 
 
-
 def iter_grid(grid: MeanReversionGrid) -> Iterable[MeanReversionParams]:
     for combo in itertools.product(
         grid.sma_windows,
@@ -84,7 +83,9 @@ def split_train_test(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     end_time = df["timestamp"].iloc[-1]
     test_start = end_time - pd.DateOffset(months=1)
     train_start = test_start - pd.DateOffset(months=11)
-    train_df = df[(df["timestamp"] >= train_start) & (df["timestamp"] < test_start)].reset_index(drop=True)
+    train_df = df[
+        (df["timestamp"] >= train_start) & (df["timestamp"] < test_start)
+    ].reset_index(drop=True)
     test_df = df[df["timestamp"] >= test_start].reset_index(drop=True)
     if train_df.empty or test_df.empty:
         split_idx = max(int(len(df) * 0.8), 1)
@@ -94,7 +95,9 @@ def split_train_test(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train_df, test_df
 
 
-def _build_feature_cache(df: pd.DataFrame, grid: MeanReversionGrid) -> MeanReversionFeatureCache:
+def _build_feature_cache(
+    df: pd.DataFrame, grid: MeanReversionGrid
+) -> MeanReversionFeatureCache:
     return MeanReversionFeatureCache(
         df,
         sma_windows=sorted(set(int(v) for v in grid.sma_windows)),
@@ -128,20 +131,28 @@ def train_mean_reversion(
     cleaned = prepare_ohlcv_frame(raw_df, timeframe)
     train_df, test_df = split_train_test(cleaned)
     if train_df.empty or test_df.empty:
-        raise ValueError("Insufficient data after split; please extend lookback or verify data integrity")
+        raise ValueError(
+            "Insufficient data after split; please extend lookback or verify data integrity"
+        )
 
     grid = grid or DEFAULT_GRID
     train_cache = _build_feature_cache(train_df, grid)
     test_cache = _build_feature_cache(test_df, grid)
 
-    rankings = grid_search_mean_reversion(train_df, iter_grid(grid), feature_cache=train_cache)[:20]
+    rankings = grid_search_mean_reversion(
+        train_df, iter_grid(grid), feature_cache=train_cache
+    )[:20]
     if not rankings:
         raise ValueError("Grid search produced no valid parameter sets")
     best = rankings[0]
     best_params: MeanReversionParams = best["params"]
 
-    train_result = backtest_mean_reversion(train_df, best_params, feature_cache=train_cache)
-    test_result = backtest_mean_reversion(test_df, best_params, feature_cache=test_cache)
+    train_result = backtest_mean_reversion(
+        train_df, best_params, feature_cache=train_cache
+    )
+    test_result = backtest_mean_reversion(
+        test_df, best_params, feature_cache=test_cache
+    )
 
     run_id = None
     if params_store_path is not None:
@@ -176,7 +187,9 @@ def train_mean_reversion(
             run_id=run_id,
         )
 
-    return TrainTestResult(best_params=best_params, train=train_result, test=test_result, rankings=rankings)
+    return TrainTestResult(
+        best_params=best_params, train=train_result, test=test_result, rankings=rankings
+    )
 
 
 __all__ = [
@@ -186,4 +199,3 @@ __all__ = [
     "TrainTestResult",
     "split_train_test",
 ]
-

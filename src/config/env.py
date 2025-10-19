@@ -1,4 +1,5 @@
-﻿"""環境變數載入工具。"""
+"""環境變數載入工具。"""
+
 from __future__ import annotations
 
 import os
@@ -14,19 +15,16 @@ DEFAULT_ENV_PATH = MODULE_DIR / ".env"
 PathLike = Union[str, Path]
 
 
-def _parse_line(line: str) -> tuple[str, str] | None:
-    line = line.strip()
-    if not line or line.startswith("#"):
-        return None
-    if "=" not in line:
-        return None
-    key, value = line.split("=", 1)
-    return key.strip(), value.strip()
+def load_env(path: Optional[PathLike] = None) -> Dict[str, str]:
+    """讀取 `.env` 檔案，並將鍵值寫入環境變數。"""
+    for candidate in _candidate_paths(path):
+        if candidate.exists():
+            return _load_env_internal(candidate)
+    return {}
 
 
 def _candidate_paths(custom: Optional[PathLike]) -> Iterable[Path]:
-    """回傳依優先順序排序的候選路徑。"""
-
+    """依優先順序產出可能的 `.env` 檔案路徑。"""
     env_override = os.getenv(ENV_OVERRIDE_KEY)
     raw_candidates: list[Optional[PathLike]] = [
         custom,
@@ -39,14 +37,27 @@ def _candidate_paths(custom: Optional[PathLike]) -> Iterable[Path]:
         if candidate is None:
             continue
         candidate_path = Path(candidate)
-        resolved = candidate_path if candidate_path.is_absolute() else (Path.cwd() / candidate_path)
+        resolved = (
+            candidate_path
+            if candidate_path.is_absolute()
+            else (Path.cwd() / candidate_path)
+        )
         yield resolved.resolve()
+
+
+def _parse_line(line: str) -> tuple[str, str] | None:
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    if "=" not in line:
+        return None
+    key, value = line.split("=", 1)
+    return key.strip(), value.strip()
 
 
 @lru_cache(maxsize=16)
 def _load_env_internal(path: Path) -> Dict[str, str]:
-    """實際載入 `.env` 檔案並回傳 key-value。"""
-
+    """將 `.env` 檔案內容轉為字典並寫入環境變數。"""
     values: Dict[str, str] = {}
     if not path.exists():
         return values
@@ -58,20 +69,6 @@ def _load_env_internal(path: Path) -> Dict[str, str]:
         os.environ.setdefault(key, value)
         values[key] = value
     return values
-
-
-def load_env(path: Optional[PathLike] = None) -> Dict[str, str]:
-    """載入 `.env` 檔案，優先順序：
-    1. 函式參數提供的路徑。
-    2. `QTS_ENV_PATH` 環境變數指向的檔案。
-    3. `src/config/.env`（模組所在目錄）。
-    4. 專案根目錄下的 `config/.env` 或 `.env`。
-    """
-
-    for candidate in _candidate_paths(path):
-        if candidate.exists():
-            return _load_env_internal(candidate)
-    return {}
 
 
 __all__ = ["load_env", "DEFAULT_ENV_PATH", "ENV_OVERRIDE_KEY"]

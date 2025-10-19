@@ -1,4 +1,5 @@
 """使用 Optuna 對 star_xgb 策略進行超參數搜尋、訓練、回測與儲存。"""
+
 from __future__ import annotations
 
 import logging
@@ -7,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import optuna
 from optuna import Trial
@@ -16,10 +17,18 @@ import pandas as pd
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from persistence.param_store import save_strategy_params
-from persistence.trade_store import prune_strategy_metrics, prune_strategy_trades, save_trades
+from persistence.trade_store import (
+    prune_strategy_metrics,
+    prune_strategy_trades,
+    save_trades,
+)
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.star_xgb.backtest import backtest_star_xgb, StarBacktestResult
-from strategies.star_xgb.dataset import TARGET_COLUMN, build_training_dataset, split_train_test
+from strategies.star_xgb.dataset import (
+    TARGET_COLUMN,
+    build_training_dataset,
+    split_train_test,
+)
 from strategies.star_xgb.features import StarFeatureCache
 from strategies.star_xgb.labels import build_label_frame
 from strategies.star_xgb.model import StarTrainingResult, train_star_model
@@ -42,69 +51,6 @@ class StarOptunaResult:
     train_backtest: StarBacktestResult
     valid_backtest: StarBacktestResult
     test_backtest: StarBacktestResult
-
-
-def _has_pending_trials(study: optuna.Study) -> bool:
-    try:
-        pending = study.get_trials(deepcopy=False, states=(TrialState.RUNNING, TrialState.WAITING))
-    except Exception:
-        return True
-    return bool(pending)
-
-
-def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
-    if not study_name:
-        return True
-    guard_dir.mkdir(parents=True, exist_ok=True)
-    guard_path = guard_dir / f"{study_name}.flag"
-    try:
-        fd = os.open(guard_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(datetime.now(timezone.utc).isoformat())
-    return True
-
-
-def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
-    if _has_pending_trials(study):
-        return False
-    if guard_dir is None:
-        return True
-    return _acquire_result_guard(study.study_name, guard_dir)
-
-
-def _suggest_indicator(trial: Trial) -> StarIndicatorParams:
-    return StarIndicatorParams(
-        trend_window=trial.suggest_categorical("trend_window", [30, 45, 60]),
-        slope_window=trial.suggest_categorical("slope_window", [5, 10, 15]),
-        atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
-        volatility_window=trial.suggest_categorical("volatility_window", [15, 20, 30]),
-        volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
-        pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
-        upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.55, 0.8, step=0.05),
-        body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.35, step=0.05),
-        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 1.0, step=0.1),
-        future_window=trial.suggest_categorical("future_window", [3, 5, 7]),
-        future_return_threshold=trial.suggest_float("future_return_threshold", 0.005, 0.02, step=0.0005),
-    )
-
-
-def _suggest_model(trial: Trial) -> StarModelParams:
-    return StarModelParams(
-        num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
-        max_depth=trial.suggest_int("max_depth", 3, 6),
-        learning_rate=trial.suggest_float("learning_rate", 0.03, 0.2, step=0.01),
-        n_estimators=trial.suggest_int("n_estimators", 200, 600, step=50),
-        min_child_samples=trial.suggest_int("min_child_samples", 5, 25, step=5),
-        subsample=trial.suggest_float("subsample", 0.6, 0.9, step=0.05),
-        colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 0.9, step=0.05),
-        feature_fraction_bynode=trial.suggest_float("feature_fraction_bynode", 0.6, 0.9, step=0.05),
-        lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
-        lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
-        bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
-        decision_threshold=trial.suggest_float("decision_threshold", 0.001, 0.005, step=0.0005),
-    )
 
 
 def optimize_star_xgb(
@@ -203,7 +149,9 @@ def optimize_star_xgb(
     )
     train_features = train_cache.build_features(best_indicator)
     train_labels, train_thresholds = build_label_frame(train_features, best_indicator)
-    train_dataset = build_training_dataset(train_features, train_labels, class_thresholds=train_thresholds)
+    train_dataset = build_training_dataset(
+        train_features, train_labels, class_thresholds=train_thresholds
+    )
 
     training_result = train_star_model(
         train_dataset,
@@ -218,9 +166,13 @@ def optimize_star_xgb(
 
     inner_validation_days = max(
         MIN_VALIDATION_DAYS,
-        min(test_days, lookback_days - test_days) if lookback_days > test_days else MIN_VALIDATION_DAYS,
+        min(test_days, lookback_days - test_days)
+        if lookback_days > test_days
+        else MIN_VALIDATION_DAYS,
     )
-    train_core_df, validation_df = split_train_test(train_df, test_days=inner_validation_days)
+    train_core_df, validation_df = split_train_test(
+        train_df, test_days=inner_validation_days
+    )
     if train_core_df.empty:
         train_core_df = train_df.copy()
     if validation_df.empty:
@@ -318,8 +270,20 @@ def optimize_star_xgb(
                 metrics=format_metrics(test_bt_result.metrics),
                 run_id=run_id,
             )
-            prune_strategy_trades(db_path=trades_store_path, strategy=strategy_key, symbol=symbol, timeframe=timeframe, keep_run_id=run_id)
-            prune_strategy_metrics(db_path=trades_store_path, strategy=strategy_key, symbol=symbol, timeframe=timeframe, keep_run_id=run_id)
+            prune_strategy_trades(
+                db_path=trades_store_path,
+                strategy=strategy_key,
+                symbol=symbol,
+                timeframe=timeframe,
+                keep_run_id=run_id,
+            )
+            prune_strategy_metrics(
+                db_path=trades_store_path,
+                strategy=strategy_key,
+                symbol=symbol,
+                timeframe=timeframe,
+                keep_run_id=run_id,
+            )
 
     return StarOptunaResult(
         study=study,
@@ -327,4 +291,75 @@ def optimize_star_xgb(
         train_backtest=train_bt_result,
         valid_backtest=valid_bt_result,
         test_backtest=test_bt_result,
+    )
+
+
+def _has_pending_trials(study: optuna.Study) -> bool:
+    try:
+        pending = study.get_trials(
+            deepcopy=False, states=(TrialState.RUNNING, TrialState.WAITING)
+        )
+    except Exception:
+        return True
+    return bool(pending)
+
+
+def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
+    if not study_name:
+        return True
+    guard_dir.mkdir(parents=True, exist_ok=True)
+    guard_path = guard_dir / f"{study_name}.flag"
+    try:
+        fd = os.open(guard_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(datetime.now(timezone.utc).isoformat())
+    return True
+
+
+def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
+    if _has_pending_trials(study):
+        return False
+    if guard_dir is None:
+        return True
+    return _acquire_result_guard(study.study_name, guard_dir)
+
+
+def _suggest_indicator(trial: Trial) -> StarIndicatorParams:
+    return StarIndicatorParams(
+        trend_window=trial.suggest_categorical("trend_window", [30, 45, 60]),
+        slope_window=trial.suggest_categorical("slope_window", [5, 10, 15]),
+        atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
+        volatility_window=trial.suggest_categorical("volatility_window", [15, 20, 30]),
+        volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
+        pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
+        upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.55, 0.8, step=0.05),
+        body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.35, step=0.05),
+        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 1.0, step=0.1),
+        future_window=trial.suggest_categorical("future_window", [3, 5, 7]),
+        future_return_threshold=trial.suggest_float(
+            "future_return_threshold", 0.005, 0.02, step=0.0005
+        ),
+    )
+
+
+def _suggest_model(trial: Trial) -> StarModelParams:
+    return StarModelParams(
+        num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
+        max_depth=trial.suggest_int("max_depth", 3, 6),
+        learning_rate=trial.suggest_float("learning_rate", 0.03, 0.2, step=0.01),
+        n_estimators=trial.suggest_int("n_estimators", 200, 600, step=50),
+        min_child_samples=trial.suggest_int("min_child_samples", 5, 25, step=5),
+        subsample=trial.suggest_float("subsample", 0.6, 0.9, step=0.05),
+        colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 0.9, step=0.05),
+        feature_fraction_bynode=trial.suggest_float(
+            "feature_fraction_bynode", 0.6, 0.9, step=0.05
+        ),
+        lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
+        lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
+        bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
+        decision_threshold=trial.suggest_float(
+            "decision_threshold", 0.001, 0.005, step=0.0005
+        ),
     )

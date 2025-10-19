@@ -1,6 +1,16 @@
-﻿import logging
+import logging
 from dataclasses import dataclass, asdict
-from typing import Any, ClassVar, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 import numpy as np
 import pandas as pd
@@ -34,7 +44,6 @@ class MeanReversionParams:
     stop_loss_mult: float
     exit_zscore: float
 
-
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
         "bb_std": 1,
         "atr_mult": 1,
@@ -64,7 +73,7 @@ class MeanReversionParams:
             "exit_zscore",
         )
         rounded = self.as_dict(rounded=True)
-        body = ', '.join(f"{key}={rounded[key]}" for key in ordered_keys)
+        body = ", ".join(f"{key}={rounded[key]}" for key in ordered_keys)
         return f"MeanReversionParams({body})"
 
 
@@ -79,12 +88,16 @@ class MeanReversionRuntimeState:
         return {
             "position": self.position,
             "entry_price": self.entry_price,
-            "entry_time": self.entry_time.isoformat() if self.entry_time is not None else None,
+            "entry_time": self.entry_time.isoformat()
+            if self.entry_time is not None
+            else None,
             "entry_zscore": self.entry_zscore,
         }
 
     @classmethod
-    def from_dict(cls, data: Optional[Mapping[str, Any]]) -> "MeanReversionRuntimeState":
+    def from_dict(
+        cls, data: Optional[Mapping[str, Any]]
+    ) -> "MeanReversionRuntimeState":
         if not data:
             return cls()
         entry_time = data.get("entry_time")
@@ -138,7 +151,9 @@ class MeanReversionFeatureCache:
         self._std: Dict[int, pd.Series] = {}
         for window in sorted(set(sma_windows)):
             self._sma[window] = closes.rolling(window=window, min_periods=window).mean()
-            self._std[window] = closes.rolling(window=window, min_periods=window).std(ddof=0)
+            self._std[window] = closes.rolling(window=window, min_periods=window).std(
+                ddof=0
+            )
 
         self._atr: Dict[int, pd.Series] = {}
         for window in sorted(set(atr_windows)):
@@ -147,23 +162,35 @@ class MeanReversionFeatureCache:
         self._volume_mean: Dict[int, pd.Series] = {}
         self._volume_std: Dict[int, pd.Series] = {}
         for window in sorted(set(volume_windows)):
-            self._volume_mean[window] = volumes.rolling(window=window, min_periods=window).mean()
-            self._volume_std[window] = volumes.rolling(window=window, min_periods=window).std(ddof=0)
+            self._volume_mean[window] = volumes.rolling(
+                window=window, min_periods=window
+            ).mean()
+            self._volume_std[window] = volumes.rolling(
+                window=window, min_periods=window
+            ).std(ddof=0)
 
         bearish = (closes < opens).astype(int)
         bullish = (closes > opens).astype(int)
         self._bear_counts: Dict[int, pd.Series] = {}
         self._bull_counts: Dict[int, pd.Series] = {}
         for window in sorted(set(pattern_windows)):
-            self._bear_counts[window] = bearish.rolling(window=window, min_periods=window).sum()
-            self._bull_counts[window] = bullish.rolling(window=window, min_periods=window).sum()
+            self._bear_counts[window] = bearish.rolling(
+                window=window, min_periods=window
+            ).sum()
+            self._bull_counts[window] = bullish.rolling(
+                window=window, min_periods=window
+            ).sum()
 
     def _validate_identity(self, df: pd.DataFrame) -> None:
         identity = (len(df), df["timestamp"].iloc[0], df["timestamp"].iloc[-1])
         if identity != self._identity:
-            raise ValueError("Feature cache dataframe mismatch; ensure identical slice is used")
+            raise ValueError(
+                "Feature cache dataframe mismatch; ensure identical slice is used"
+            )
 
-    def build_features(self, params: MeanReversionParams, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    def build_features(
+        self, params: MeanReversionParams, df: Optional[pd.DataFrame] = None
+    ) -> pd.DataFrame:
         base = self._base if df is None else df
         if df is not None:
             self._validate_identity(df)
@@ -184,78 +211,47 @@ class MeanReversionFeatureCache:
         return frame
 
 
-def compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
-    """計算 Average True Range。"""
-    high_low = df["high"] - df["low"]
-    high_close = (df["high"] - df["close"].shift(1)).abs()
-    low_close = (df["low"] - df["close"].shift(1)).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(window=window, min_periods=window).mean()
-
-
 def compute_features(df: pd.DataFrame, params: MeanReversionParams) -> pd.DataFrame:
     """建立均值回歸策略所需指標。"""
     frame = df.copy()
-    frame["sma"] = frame["close"].rolling(window=params.sma_window, min_periods=params.sma_window).mean()
-    frame["std"] = frame["close"].rolling(window=params.sma_window, min_periods=params.sma_window).std(ddof=0)
+    frame["sma"] = (
+        frame["close"]
+        .rolling(window=params.sma_window, min_periods=params.sma_window)
+        .mean()
+    )
+    frame["std"] = (
+        frame["close"]
+        .rolling(window=params.sma_window, min_periods=params.sma_window)
+        .std(ddof=0)
+    )
     frame["upper"] = frame["sma"] + params.bb_std * frame["std"]
     frame["lower"] = frame["sma"] - params.bb_std * frame["std"]
     frame["atr"] = compute_atr(frame, params.atr_window)
     frame["zscore"] = (frame["close"] - frame["sma"]) / frame["std"].replace(0, np.nan)
-    volume_mean = frame["volume"].rolling(window=params.volume_window, min_periods=params.volume_window).mean()
-    volume_std = frame["volume"].rolling(window=params.volume_window, min_periods=params.volume_window).std(ddof=0)
+    volume_mean = (
+        frame["volume"]
+        .rolling(window=params.volume_window, min_periods=params.volume_window)
+        .mean()
+    )
+    volume_std = (
+        frame["volume"]
+        .rolling(window=params.volume_window, min_periods=params.volume_window)
+        .std(ddof=0)
+    )
     frame["volume_z"] = (frame["volume"] - volume_mean) / volume_std.replace(0, np.nan)
     window = max(params.pattern_min, 1)
-    frame["bear_count"] = (frame["close"] < frame["open"]).rolling(window=window, min_periods=window).sum()
-    frame["bull_count"] = (frame["close"] > frame["open"]).rolling(window=window, min_periods=window).sum()
+    frame["bear_count"] = (
+        (frame["close"] < frame["open"])
+        .rolling(window=window, min_periods=window)
+        .sum()
+    )
+    frame["bull_count"] = (
+        (frame["close"] > frame["open"])
+        .rolling(window=window, min_periods=window)
+        .sum()
+    )
     frame = frame.dropna().reset_index(drop=True)
     return frame
-
-
-def _entry_conditions(row: pd.Series, params: MeanReversionParams) -> Tuple[bool, bool]:
-    long_cond = (
-        (row["zscore"] <= -params.entry_zscore)
-        or ((row["sma"] - row["close"]) >= params.atr_mult * row["atr"])
-    )
-    long_cond = (
-        long_cond
-        and (row["volume_z"] >= params.volume_z)
-        and (row["bear_count"] >= params.pattern_min)
-    )
-    short_cond = (
-        (row["zscore"] >= params.entry_zscore)
-        or ((row["close"] - row["sma"]) >= params.atr_mult * row["atr"])
-    )
-    short_cond = (
-        short_cond
-        and (row["volume_z"] >= params.volume_z)
-        and (row["bull_count"] >= params.pattern_min)
-    )
-    return long_cond, short_cond
-
-
-def _exit_conditions(
-    row: pd.Series,
-    params: MeanReversionParams,
-    position: int,
-    entry_price: float,
-) -> Tuple[bool, str]:
-    if position == 0:
-        return False, ""
-    z = row["zscore"]
-    atr = row["atr"]
-    price = row["close"]
-    if position == 1:
-        if z >= -params.exit_zscore:
-            return True, "mean_revert"
-        if price <= entry_price - params.stop_loss_mult * atr:
-            return True, "stop_loss"
-    else:
-        if z <= params.exit_zscore:
-            return True, "mean_revert"
-        if price >= entry_price + params.stop_loss_mult * atr:
-            return True, "stop_loss"
-    return False, ""
 
 
 def backtest_mean_reversion(
@@ -264,7 +260,11 @@ def backtest_mean_reversion(
     feature_cache: Optional[MeanReversionFeatureCache] = None,
 ) -> BacktestResult:
     """執行單組參數的回測，返回績效與交易紀錄。"""
-    features = feature_cache.build_features(params, df) if feature_cache else compute_features(df, params)
+    features = (
+        feature_cache.build_features(params, df)
+        if feature_cache
+        else compute_features(df, params)
+    )
     if features.empty:
         empty_metrics = {
             "annualized_return": 0.0,
@@ -274,7 +274,9 @@ def backtest_mean_reversion(
             "win_rate": 0.0,
             "trades": 0,
         }
-        return BacktestResult(empty_metrics, pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=float))
+        return BacktestResult(
+            empty_metrics, pd.DataFrame(), pd.DataFrame(), pd.Series(dtype=float)
+        )
 
     position = 0
     entry_price = 0.0
@@ -294,7 +296,7 @@ def backtest_mean_reversion(
             bar_ret = 0.0
         else:
             bar_ret = position * (close - prev_close) / prev_close
-            equity *= (1 + bar_ret)
+            equity *= 1 + bar_ret
         per_bar_returns.append(bar_ret)
         equity_curve.append(equity)
         equity_timestamps.append(timestamp)
@@ -357,7 +359,9 @@ def backtest_mean_reversion(
         )
 
     trades_df = pd.DataFrame(trades)
-    per_bar_series = pd.Series(per_bar_returns, index=features["timestamp"], name="strategy_return")
+    per_bar_series = pd.Series(
+        per_bar_returns, index=features["timestamp"], name="strategy_return"
+    )
     if per_bar_series.empty:
         empty_metrics = {
             "annualized_return": 0.0,
@@ -367,7 +371,9 @@ def backtest_mean_reversion(
             "win_rate": 0.0,
             "trades": 0,
         }
-        equity_df = pd.DataFrame({"timestamp": features["timestamp"], "equity": equity_curve})
+        equity_df = pd.DataFrame(
+            {"timestamp": features["timestamp"], "equity": equity_curve}
+        )
         return BacktestResult(empty_metrics, trades_df, equity_df, per_bar_series)
 
     total_return = equity_curve[-1] - 1
@@ -377,11 +383,15 @@ def backtest_mean_reversion(
 
     equity_series = pd.Series(equity_curve, index=equity_timestamps)
     running_max = equity_series.cummax()
-    drawdown = ((equity_series / running_max) - 1).min() if not equity_series.empty else 0.0
+    drawdown = (
+        ((equity_series / running_max) - 1).min() if not equity_series.empty else 0.0
+    )
 
     win_rate = float((trades_df["return"] > 0).mean()) if not trades_df.empty else 0.0
     metrics = {
-        "annualized_return": float((1 + total_return) ** (PERIODS_PER_YEAR / max(len(per_bar_series), 1)) - 1),
+        "annualized_return": float(
+            (1 + total_return) ** (PERIODS_PER_YEAR / max(len(per_bar_series), 1)) - 1
+        ),
         "total_return": float(total_return),
         "sharpe": float(sharpe),
         "max_drawdown": float(abs(drawdown)),
@@ -438,13 +448,17 @@ def generate_realtime_decision(
         if exit_flag:
             pnl_pct = 0.0
             if runtime_state.entry_price:
-                pnl_pct = (close_price - runtime_state.entry_price) / runtime_state.entry_price
+                pnl_pct = (
+                    close_price - runtime_state.entry_price
+                ) / runtime_state.entry_price
                 pnl_pct *= runtime_state.position
             context.update(
                 {
                     "reason": exit_reason,
                     "entry_price": runtime_state.entry_price,
-                    "entry_time": runtime_state.entry_time.isoformat() if runtime_state.entry_time is not None else None,
+                    "entry_time": runtime_state.entry_time.isoformat()
+                    if runtime_state.entry_time is not None
+                    else None,
                     "pnl_pct": pnl_pct,
                 }
             )
@@ -504,3 +518,55 @@ __all__ = [
     "grid_search_mean_reversion",
 ]
 
+
+def compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
+    """計算 Average True Range。"""
+    high_low = df["high"] - df["low"]
+    high_close = (df["high"] - df["close"].shift(1)).abs()
+    low_close = (df["low"] - df["close"].shift(1)).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=window, min_periods=window).mean()
+
+
+def _entry_conditions(row: pd.Series, params: MeanReversionParams) -> Tuple[bool, bool]:
+    long_cond = (row["zscore"] <= -params.entry_zscore) or (
+        (row["sma"] - row["close"]) >= params.atr_mult * row["atr"]
+    )
+    long_cond = (
+        long_cond
+        and (row["volume_z"] >= params.volume_z)
+        and (row["bear_count"] >= params.pattern_min)
+    )
+    short_cond = (row["zscore"] >= params.entry_zscore) or (
+        (row["close"] - row["sma"]) >= params.atr_mult * row["atr"]
+    )
+    short_cond = (
+        short_cond
+        and (row["volume_z"] >= params.volume_z)
+        and (row["bull_count"] >= params.pattern_min)
+    )
+    return long_cond, short_cond
+
+
+def _exit_conditions(
+    row: pd.Series,
+    params: MeanReversionParams,
+    position: int,
+    entry_price: float,
+) -> Tuple[bool, str]:
+    if position == 0:
+        return False, ""
+    z = row["zscore"]
+    atr = row["atr"]
+    price = row["close"]
+    if position == 1:
+        if z >= -params.exit_zscore:
+            return True, "mean_revert"
+        if price <= entry_price - params.stop_loss_mult * atr:
+            return True, "stop_loss"
+    else:
+        if z <= params.exit_zscore:
+            return True, "mean_revert"
+        if price >= entry_price + params.stop_loss_mult * atr:
+            return True, "stop_loss"
+    return False, ""

@@ -1,4 +1,5 @@
 """star_xgb 策略的參數定義。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -24,10 +25,10 @@ class StarIndicatorParams:
     future_return_threshold: float
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
-        'upper_shadow_min': 2,
-        'body_ratio_max': 2,
-        'volume_ratio_max': 2,
-        'future_return_threshold': 3,
+        "upper_shadow_min": 2,
+        "body_ratio_max": 2,
+        "volume_ratio_max": 2,
+        "future_return_threshold": 3,
     }
 
     def as_dict(self, *, rounded: bool = False) -> Dict[str, float | int]:
@@ -55,13 +56,13 @@ class StarModelParams:
     decision_threshold: float
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
-        'learning_rate': 3,
-        'subsample': 2,
-        'colsample_bytree': 2,
-        'feature_fraction_bynode': 2,
-        'lambda_l1': 2,
-        'lambda_l2': 2,
-        'decision_threshold': 4,
+        "learning_rate": 3,
+        "subsample": 2,
+        "colsample_bytree": 2,
+        "feature_fraction_bynode": 2,
+        "lambda_l1": 2,
+        "lambda_l2": 2,
+        "decision_threshold": 4,
     }
 
     def as_dict(self, *, rounded: bool = False) -> Dict[str, float | int]:
@@ -71,4 +72,4 @@ class StarModelParams:
         return format_params(data, decimals_map=self._ROUND_DECIMALS)
 
 
-__all__ = ['StarIndicatorParams', 'StarModelParams']
+__all__ = ["StarIndicatorParams", "StarModelParams"]

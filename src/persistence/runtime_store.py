@@ -63,7 +63,10 @@ def save_runtime_state(
         )
     conn.close()
     LOGGER.debug(
-        "Saved runtime state strategy=%s symbol=%s timeframe=%s", strategy, symbol, timeframe
+        "Saved runtime state strategy=%s symbol=%s timeframe=%s",
+        strategy,
+        symbol,
+        timeframe,
     )
     return RuntimeRecord(
         strategy=strategy,
