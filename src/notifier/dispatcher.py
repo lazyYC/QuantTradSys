@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import ccxt
 import requests
 
 from brokers import AlpacaAPIError, AlpacaCredentials, AlpacaPaperTradingClient
@@ -11,6 +12,7 @@ from config.env import DEFAULT_ENV_PATH, load_env
 LOGGER = logging.getLogger(__name__)
 
 _ALPACA_CLIENT: Optional[AlpacaPaperTradingClient] = None
+_BINANCE_CLIENT: Optional[ccxt.Exchange] = None
 
 
 def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
@@ -27,13 +29,21 @@ def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
 
 def _normalize_symbol(symbol: Optional[str]) -> str:
     if not symbol:
-        return "BTC/USD"
-    normalized = symbol.upper().replace("USDT", "USD")
-    if "-" in normalized and "/" not in normalized:
+        return "BTC/USDT"
+    normalized = symbol.upper().replace(" ", "")
+    if "-" in normalized:
         normalized = normalized.replace("-", "/")
     if "/" not in normalized and len(normalized) > 3:
         normalized = normalized[:3] + "/" + normalized[3:]
     return normalized
+
+
+def _prepare_alpaca_order_symbol(symbol: str) -> str:
+    order_symbol = symbol
+    prefer_slashless = os.getenv("ALPACA_SYMBOL_STRIP_SLASH", "true").lower() == "true"
+    if prefer_slashless:
+        order_symbol = symbol.replace("/", "")
+    return order_symbol
 
 
 def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
@@ -89,39 +99,9 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
     return 0.0
 
 
-def _fetch_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
-    candidates = [
-        symbol.upper().replace(" ", ""),
-        symbol.upper().replace("/", ""),
-        symbol.upper().replace("/", "-"),
-    ]
-    data_url = os.getenv(
-        "ALPACA_DATA_URL",
-        "https://data.alpaca.markets/v1beta3/crypto/us/latest/trades",
-    )
-    for token in candidates:
-        try:
-            response = client._session.get(  # type: ignore[attr-defined]
-                data_url,
-                params={"symbols": token},
-                timeout=5,
-            )
-            if response.status_code >= 400:
-                LOGGER.debug("Alpaca price query failed (%s) for token %s", response.status_code, token)
-                continue
-            payload = response.json()
-            trade = payload.get("trades", {}).get(token)
-            if not trade:
-                continue
-            price = trade.get("p") or trade.get("price")
-            if price is None:
-                continue
-            return float(price)
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to fetch latest price for %s as %s: %s", symbol, token, exc)
-            continue
-    LOGGER.warning("Unable to obtain latest price for %s from Alpaca", symbol)
-    return None
+def _fetch_latest_price(_: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
+    """Backward-compatible wrapper that now delegates to Binance pricing."""
+    return _fetch_ccxt_price(_normalize_ccxt_symbol(symbol))
 
 
 def get_alpaca_client(*, env_path: Optional[Path] = None) -> Optional[AlpacaPaperTradingClient]:
@@ -130,10 +110,10 @@ def get_alpaca_client(*, env_path: Optional[Path] = None) -> Optional[AlpacaPape
     return _get_alpaca_client()
 
 
-def get_latest_price(client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
+def get_latest_price(_client: AlpacaPaperTradingClient, symbol: str) -> Optional[float]:
     """Fetch latest trade price for a trading symbol."""
-    normalized = _normalize_symbol(symbol)
-    return _fetch_latest_price(client, normalized)
+    normalized = _normalize_ccxt_symbol(symbol)
+    return _fetch_ccxt_price(normalized)
 
 
 def _is_price_within_tolerance(context: Dict[str, Any], client: AlpacaPaperTradingClient, symbol: str) -> bool:
@@ -150,7 +130,7 @@ def _is_price_within_tolerance(context: Dict[str, Any], client: AlpacaPaperTradi
     except ValueError:
         tolerance = 0.005
 
-    current_price = _fetch_latest_price(client, symbol)
+    current_price = _fetch_ccxt_price(_normalize_ccxt_symbol(symbol))
     if current_price is None:
         LOGGER.warning("Unable to verify current price for %s; trade skipped", symbol)
         return False
@@ -188,6 +168,35 @@ def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
     return _ALPACA_CLIENT
 
 
+def _get_binance_client() -> ccxt.Exchange:
+    global _BINANCE_CLIENT
+    if _BINANCE_CLIENT is None:
+        _BINANCE_CLIENT = ccxt.binance({"enableRateLimit": True})
+    return _BINANCE_CLIENT
+
+
+def _normalize_ccxt_symbol(symbol: str) -> str:
+    normalized = symbol.upper().replace(" ", "")
+    if "-" in normalized:
+        normalized = normalized.replace("-", "/")
+    if "/" not in normalized and len(normalized) > 3:
+        normalized = normalized[:3] + "/" + normalized[3:]
+    return normalized
+
+
+def _fetch_ccxt_price(symbol: str) -> Optional[float]:
+    try:
+        ticker = _get_binance_client().fetch_ticker(symbol)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to fetch Binance price for %s: %s", symbol, exc)
+        return None
+    price = ticker.get("last") or ticker.get("close")
+    if price is None:
+        LOGGER.debug("Ticker for %s missing price fields: %s", symbol, ticker)
+        return None
+    return float(price)
+
+
 def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]) -> bool:
     symbol = _normalize_symbol(str(context.get("symbol", "")))
     action_upper = action.upper()
@@ -201,7 +210,7 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
             if not _is_price_within_tolerance(context, client, symbol):
                 return False
             client.submit_order(
-                symbol=symbol,
+                symbol=_prepare_alpaca_order_symbol(symbol),
                 side="buy",
                 notional=notional,
                 order_type="market",
@@ -211,7 +220,7 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
             success = True
         elif action_upper == "EXIT_LONG":
             try:
-                client.close_position(symbol, side="sell")
+                client.close_position(_prepare_alpaca_order_symbol(symbol), side="sell")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
                 return False
@@ -225,7 +234,7 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
             if not _is_price_within_tolerance(context, client, symbol):
                 return False
             client.submit_order(
-                symbol=symbol,
+                symbol=_prepare_alpaca_order_symbol(symbol),
                 side="sell",
                 notional=notional,
                 order_type="market",
@@ -235,7 +244,7 @@ def execute_trading(client: AlpacaPaperTradingClient, action: str, context: Dict
             success = True
         elif action_upper == "EXIT_SHORT":
             try:
-                client.close_position(symbol, side="buy")
+                client.close_position(_prepare_alpaca_order_symbol(symbol), side="buy")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
                 return False

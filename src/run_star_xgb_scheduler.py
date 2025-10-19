@@ -243,9 +243,9 @@ class StarRealtimeEngine:
         if new_state != self.runtime_state:
             save_runtime_state(
                 self.state_store_path,
-                self.strategy,
-                self.symbol,
-                self.timeframe,
+                strategy=self.strategy,
+                symbol=self.symbol,
+                timeframe=self.timeframe,
                 state=new_state.to_dict(),
             )
             self.runtime_state = new_state
