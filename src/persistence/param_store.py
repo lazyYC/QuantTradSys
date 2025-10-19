@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -64,9 +64,7 @@ def save_strategy_params(
             (strategy, symbol, timeframe, params_json, metrics_json, now),
         )
     conn.close()
-    LOGGER.info(
-        "Stored parameters for %s | %s | %s", strategy, symbol, timeframe
-    )
+    LOGGER.info("Stored parameters for %s | %s | %s", strategy, symbol, timeframe)
     return StrategyRecord(
         strategy=strategy,
         symbol=symbol,

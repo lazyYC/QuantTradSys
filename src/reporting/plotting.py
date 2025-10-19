@@ -1,4 +1,5 @@
 """Plotly figure utilities for strategy reports."""
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -39,7 +40,9 @@ def _prepare_candle_frame(candles: pd.DataFrame) -> pd.DataFrame:
     return frame.reset_index(drop=True)
 
 
-def _build_event_strings(candles: pd.DataFrame, trades: Optional[pd.DataFrame]) -> List[str]:
+def _build_event_strings(
+    candles: pd.DataFrame, trades: Optional[pd.DataFrame]
+) -> List[str]:
     """Collect entry/exit descriptions keyed by candle timestamp."""
 
     if trades is None or trades.empty or candles.empty:
@@ -53,8 +56,12 @@ def _build_event_strings(candles: pd.DataFrame, trades: Optional[pd.DataFrame]) 
         events.setdefault(ts, []).append(message)
 
     trade_frame = trades.copy()
-    trade_frame["entry_time"] = pd.to_datetime(trade_frame.get("entry_time"), utc=True, errors="coerce")
-    trade_frame["exit_time"] = pd.to_datetime(trade_frame.get("exit_time"), utc=True, errors="coerce")
+    trade_frame["entry_time"] = pd.to_datetime(
+        trade_frame.get("entry_time"), utc=True, errors="coerce"
+    )
+    trade_frame["exit_time"] = pd.to_datetime(
+        trade_frame.get("exit_time"), utc=True, errors="coerce"
+    )
 
     for _, row in trade_frame.iterrows():
         side = (row.get("side") or "?").upper()
@@ -82,7 +89,9 @@ def _build_event_strings(candles: pd.DataFrame, trades: Optional[pd.DataFrame]) 
     return annotations
 
 
-def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, col: int = 1) -> None:
+def _add_trade_markers(
+    fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, col: int = 1
+) -> None:
     """Add entry/exit markers with hover suppressed."""
 
     if trades.empty:
@@ -102,7 +111,10 @@ def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, co
                 marker=dict(
                     symbol="triangle-up",
                     size=10,
-                    color=[COLOR_LONG if side == "LONG" else COLOR_SHORT for side in entries["side"]],
+                    color=[
+                        COLOR_LONG if side == "LONG" else COLOR_SHORT
+                        for side in entries["side"]
+                    ],
                     line=dict(width=1, color="#1f2937"),
                 ),
                 hoverinfo="skip",
@@ -118,7 +130,12 @@ def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, co
                 y=exits["exit_price"],
                 mode="markers",
                 name="Exit",
-                marker=dict(symbol="x", size=9, color=COLOR_EXIT, line=dict(width=1, color="#1f2937")),
+                marker=dict(
+                    symbol="x",
+                    size=9,
+                    color=COLOR_EXIT,
+                    line=dict(width=1, color="#1f2937"),
+                ),
                 hoverinfo="skip",
                 text=exits["exit_reason"].fillna("exit"),
             ),
@@ -129,7 +146,7 @@ def _add_trade_markers(fig: go.Figure, trades: pd.DataFrame, *, row: int = 1, co
 
 def _compose_hover_text(frame: pd.DataFrame, events: List[str]) -> List[str]:
     hover_text: List[str] = []
-    for ts, o, h, l, c, event in zip(
+    for ts, open_value, high_value, low_value, close_value, event in zip(
         frame["timestamp"],
         frame["open"],
         frame["high"],
@@ -139,10 +156,10 @@ def _compose_hover_text(frame: pd.DataFrame, events: List[str]) -> List[str]:
     ):
         base = [
             f"Time={pd.to_datetime(ts).strftime('%Y-%m-%d %H:%M')}",
-            f"Open={o:.2f}",
-            f"High={h:.2f}",
-            f"Low={l:.2f}",
-            f"Close={c:.2f}",
+            f"Open={open_value:.2f}",
+            f"High={high_value:.2f}",
+            f"Low={low_value:.2f}",
+            f"Close={close_value:.2f}",
         ]
         if event:
             base.append(event.lstrip("<br>"))
@@ -188,7 +205,14 @@ def build_candlestick_figure(
         hovermode="x unified",
         spikedistance=-1,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#e5e7eb", showspikes=True, spikemode="across", spikesnap="cursor", spikethickness=1)
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#e5e7eb",
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikethickness=1,
+    )
     fig.update_yaxes(showgrid=True, gridcolor="#e5e7eb")
     return fig
 
@@ -249,13 +273,20 @@ def build_trade_overview_figure(
     )
     if equity is not None and not equity.empty:
         equity_sorted = equity.sort_values("timestamp")
-        start_window = candle_frame["timestamp"].min() if not candle_frame.empty else None
+        start_window = (
+            candle_frame["timestamp"].min() if not candle_frame.empty else None
+        )
         first_equity_ts = equity_sorted["timestamp"].iloc[0]
         baseline_ts = first_equity_ts
         if start_window is not None and start_window < first_equity_ts:
             baseline_ts = start_window
         if baseline_ts < first_equity_ts:
-            baseline_row = pd.DataFrame({"timestamp": [baseline_ts], "equity": [equity_sorted["equity"].iloc[0]]})
+            baseline_row = pd.DataFrame(
+                {
+                    "timestamp": [baseline_ts],
+                    "equity": [equity_sorted["equity"].iloc[0]],
+                }
+            )
             equity_sorted = pd.concat([baseline_row, equity_sorted], ignore_index=True)
         fig.add_trace(
             go.Scatter(
@@ -272,8 +303,12 @@ def build_trade_overview_figure(
     if trades is not None and not trades.empty:
         closed = trades.dropna(subset=["exit_time"]).copy()
         if not closed.empty:
-            closed["entry_time"] = pd.to_datetime(closed["entry_time"], utc=True, errors="coerce")
-            closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True, errors="coerce")
+            closed["entry_time"] = pd.to_datetime(
+                closed["entry_time"], utc=True, errors="coerce"
+            )
+            closed["exit_time"] = pd.to_datetime(
+                closed["exit_time"], utc=True, errors="coerce"
+            )
             if show_markers:
                 _add_trade_markers(fig, closed, row=1, col=1)
             candle_width_ms = _estimate_bar_width(None, candle_frame)
@@ -287,13 +322,18 @@ def build_trade_overview_figure(
             else:
                 widths = pd.Series(width_default, index=returns.index)
             custom_entry = closed["entry_time"].dt.strftime("%Y-%m-%d %H:%M")
-            custom_side = closed.get("side", pd.Series("-", index=closed.index)).astype(str)
+            custom_side = closed.get("side", pd.Series("-", index=closed.index)).astype(
+                str
+            )
             fig.add_trace(
                 go.Bar(
                     x=bar_centers,
                     y=returns,
                     width=widths,
-                    marker=dict(color=np.where(returns >= 0, COLOR_LONG, COLOR_SHORT), line=dict(width=0)),
+                    marker=dict(
+                        color=np.where(returns >= 0, COLOR_LONG, COLOR_SHORT),
+                        line=dict(width=0),
+                    ),
                     name="Trade Return",
                     hovertemplate=(
                         "Entry=%{customdata[0]}<br>"
@@ -338,10 +378,45 @@ def build_trade_overview_figure(
         row=1,
         col=1,
     )
-    fig.update_xaxes(title_text="Time", row=2, col=1, showspikes=True, spikemode="across", spikesnap="cursor", spikecolor="#1f2937", spikethickness=1)
-    fig.update_yaxes(domain=[0.45, 1], title_text="Price", row=1, col=1, secondary_y=False, fixedrange=False, showgrid=True, gridcolor="#e5e7eb")
-    fig.update_yaxes(domain=[0.45, 1], title_text="Equity", row=1, col=1, secondary_y=True, fixedrange=False, showgrid=True, gridcolor="#e5e7eb")
-    fig.update_yaxes(domain=[0, 0.28], title_text="Return", row=2, col=1, fixedrange=False, showgrid=True, gridcolor="#e5e7eb")
+    fig.update_xaxes(
+        title_text="Time",
+        row=2,
+        col=1,
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikecolor="#1f2937",
+        spikethickness=1,
+    )
+    fig.update_yaxes(
+        domain=[0.45, 1],
+        title_text="Price",
+        row=1,
+        col=1,
+        secondary_y=False,
+        fixedrange=False,
+        showgrid=True,
+        gridcolor="#e5e7eb",
+    )
+    fig.update_yaxes(
+        domain=[0.45, 1],
+        title_text="Equity",
+        row=1,
+        col=1,
+        secondary_y=True,
+        fixedrange=False,
+        showgrid=True,
+        gridcolor="#e5e7eb",
+    )
+    fig.update_yaxes(
+        domain=[0, 0.28],
+        title_text="Return",
+        row=2,
+        col=1,
+        fixedrange=False,
+        showgrid=True,
+        gridcolor="#e5e7eb",
+    )
     return fig
 
 

@@ -1,5 +1,5 @@
+"""star_xgb 策略特徵建構模組。"""
 
-"""star_xgb 策略的特徵建構與快取。"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,34 +11,9 @@ import pandas as pd
 from .params import StarIndicatorParams
 
 
-def _compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
-    """計算 Average True Range。"""
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
-    prev_close = close.shift(1)
-    tr_components = pd.concat(
-        [
-            (high - low),
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    )
-    true_range = tr_components.max(axis=1)
-    return true_range.rolling(window=window, min_periods=window).mean()
-
-
-def _validate_required_columns(df: pd.DataFrame) -> None:
-    required = {"timestamp", "open", "high", "low", "close", "volume"}
-    missing = required.difference(df.columns)
-    if missing:
-        raise ValueError(f"缺少必要欄位: {sorted(missing)}")
-
-
 @dataclass
 class StarFeatureCache:
-    """儲存常用 rolling 指標，避免重複運算。"""
+    """預先計算常用 rolling 指標，避免重複運算。"""
 
     base: pd.DataFrame
     trend_windows: Sequence[int]
@@ -63,7 +38,9 @@ class StarFeatureCache:
         for window in sorted(set(int(w) for w in self.trend_windows)):
             if window <= 0:
                 raise ValueError("trend window must be positive")
-            self._trend_ma[window] = closes.rolling(window=window, min_periods=window).mean()
+            self._trend_ma[window] = closes.rolling(
+                window=window, min_periods=window
+            ).mean()
 
         self._atr: Dict[int, pd.Series] = {}
         for window in sorted(set(int(w) for w in self.atr_windows)):
@@ -75,21 +52,29 @@ class StarFeatureCache:
         for window in sorted(set(int(w) for w in self.volatility_windows)):
             if window <= 0:
                 raise ValueError("volatility window must be positive")
-            self._volatility_std[window] = closes.rolling(window=window, min_periods=window).std(ddof=0)
+            self._volatility_std[window] = closes.rolling(
+                window=window, min_periods=window
+            ).std(ddof=0)
 
         self._volume_mean: Dict[int, pd.Series] = {}
         for window in sorted(set(int(w) for w in self.volume_windows)):
             if window <= 0:
                 raise ValueError("volume window must be positive")
-            self._volume_mean[window] = volumes.rolling(window=window, min_periods=window).mean()
+            self._volume_mean[window] = volumes.rolling(
+                window=window, min_periods=window
+            ).mean()
 
         self._rolling_high: Dict[int, pd.Series] = {}
         self._rolling_low: Dict[int, pd.Series] = {}
         for window in sorted(set(int(w) for w in self.pattern_windows)):
             if window <= 0:
                 raise ValueError("pattern window must be positive")
-            self._rolling_high[window] = highs.rolling(window=window, min_periods=window).max()
-            self._rolling_low[window] = lows.rolling(window=window, min_periods=window).min()
+            self._rolling_high[window] = highs.rolling(
+                window=window, min_periods=window
+            ).max()
+            self._rolling_low[window] = lows.rolling(
+                window=window, min_periods=window
+            ).min()
 
         identity = (
             len(frame),
@@ -107,9 +92,13 @@ class StarFeatureCache:
         base = self._base if df is None else df.reset_index(drop=True)
         if df is not None:
             _validate_required_columns(df)
-            identity = (len(base), base["timestamp"].iloc[0], base["timestamp"].iloc[-1])
+            identity = (
+                len(base),
+                base["timestamp"].iloc[0],
+                base["timestamp"].iloc[-1],
+            )
             if identity != self._identity:
-                raise ValueError("特徵快取與資料切片不一致，請重新建立快取")
+                raise ValueError("特徵快取與輸入資料不一致，請重新建立快取。")
 
         frame = base[["timestamp", "open", "high", "low", "close", "volume"]].copy()
         open_ = frame["open"].astype(float)
@@ -137,7 +126,9 @@ class StarFeatureCache:
         low_window = self._rolling_low[params.pattern_lookback]
 
         frame["trend_ma"] = trend_ma
-        frame["trend_slope"] = (trend_ma - trend_ma.shift(params.slope_window)) / max(params.slope_window, 1)
+        frame["trend_slope"] = (trend_ma - trend_ma.shift(params.slope_window)) / max(
+            params.slope_window, 1
+        )
         frame["close_trend_pct"] = (close - trend_ma) / trend_ma.replace(0.0, np.nan)
         frame["atr"] = atr
         frame["atr_norm"] = atr / close.replace(0.0, np.nan)
@@ -146,8 +137,12 @@ class StarFeatureCache:
 
         frame["rolling_high"] = high_window
         frame["rolling_low"] = low_window
-        frame["proximity_to_high"] = (high_window - close) / high_window.replace(0.0, np.nan)
-        frame["proximity_to_low"] = (close - low_window) / low_window.replace(0.0, np.nan)
+        frame["proximity_to_high"] = (high_window - close) / high_window.replace(
+            0.0, np.nan
+        )
+        frame["proximity_to_low"] = (close - low_window) / low_window.replace(
+            0.0, np.nan
+        )
         frame["range_percent"] = (high_window - low_window) / close.replace(0.0, np.nan)
 
         frame["return_1"] = close.pct_change()
@@ -165,8 +160,33 @@ def build_feature_frame(
     params: StarIndicatorParams,
     df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    """便利函式：透過快取建立特徵 DataFrame。"""
+    """方便函式：透過快取建構特徵 DataFrame。"""
     return cache.build_features(params, df=df)
+
+
+def _compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
+    """計算 Average True Range。"""
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+    prev_close = close.shift(1)
+    tr_components = pd.concat(
+        [
+            (high - low),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    )
+    true_range = tr_components.max(axis=1)
+    return true_range.rolling(window=window, min_periods=window).mean()
+
+
+def _validate_required_columns(df: pd.DataFrame) -> None:
+    required = {"timestamp", "open", "high", "low", "close", "volume"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"缺少必要欄位: {sorted(missing)}")
 
 
 __all__ = ["StarFeatureCache", "build_feature_frame"]

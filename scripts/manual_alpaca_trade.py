@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Manual Alpaca trade trigger for testing."""
+
 from __future__ import annotations
 
 import argparse
@@ -20,30 +21,6 @@ from notifier.dispatcher import (  # noqa: E402
 )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Manual Alpaca trade trigger for testing.")
-    parser.add_argument("--action", required=True, choices=["ENTER_LONG", "EXIT_LONG", "ENTER_SHORT", "EXIT_SHORT"])
-    parser.add_argument("--symbol", default="BTC/USDT", help="Trading symbol")
-    parser.add_argument(
-        "--order-ratio",
-        type=float,
-        help="Override ALPACA_ORDER_RATIO (fraction of buying power, e.g. 0.95)",
-    )
-    parser.add_argument(
-        "--price-tolerance",
-        type=float,
-        help="Override ALPACA_PRICE_TOLERANCE (fractional deviation allowed, e.g. 0.005)",
-    )
-    parser.add_argument(
-        "--env",
-        type=Path,
-        default=SRC_DIR / "config" / ".env",
-        help="Path to .env file containing Alpaca credentials",
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Preview order without submitting")
-    return parser.parse_args()
-
-
 def main() -> None:
     args = parse_args()
 
@@ -54,7 +31,9 @@ def main() -> None:
 
     client = get_alpaca_client(env_path=args.env)
     if client is None:
-        raise SystemExit("Failed to initialize Alpaca client; check credentials or .env path.")
+        raise SystemExit(
+            "Failed to initialize Alpaca client; check credentials or .env path."
+        )
 
     latest_price = get_latest_price(client, args.symbol)
     if latest_price is None:
@@ -76,6 +55,38 @@ def main() -> None:
         print("Order submitted.")
     else:
         print("Order failed.")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Manual Alpaca trade trigger for testing."
+    )
+    parser.add_argument(
+        "--action",
+        required=True,
+        choices=["ENTER_LONG", "EXIT_LONG", "ENTER_SHORT", "EXIT_SHORT"],
+    )
+    parser.add_argument("--symbol", default="BTC/USDT", help="Trading symbol")
+    parser.add_argument(
+        "--order-ratio",
+        type=float,
+        help="Override ALPACA_ORDER_RATIO (fraction of buying power, e.g. 0.95)",
+    )
+    parser.add_argument(
+        "--price-tolerance",
+        type=float,
+        help="Override ALPACA_PRICE_TOLERANCE (fractional deviation allowed, e.g. 0.005)",
+    )
+    parser.add_argument(
+        "--env",
+        type=Path,
+        default=SRC_DIR / "config" / ".env",
+        help="Path to .env file containing Alpaca credentials",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview order without submitting"
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

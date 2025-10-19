@@ -1,4 +1,5 @@
 """star_xgb 策略報表生成腳本。"""
+
 from __future__ import annotations
 
 import argparse
@@ -36,7 +37,281 @@ from strategies.star_xgb.params import StarIndicatorParams, StarModelParams  # n
 TITLE_DEFAULT = "Star XGB Report"
 
 
-def _parse_time_boundaries(start: str | None, end: str | None) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+def main() -> None:
+    args = parse_args()
+    start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
+    if start_ts and end_ts and start_ts > end_ts:
+        raise SystemExit("起始時間需早於結束時間")
+
+    candles = pd.DataFrame()
+    if args.ohlcv:
+        candles = _load_candles_from_csv(
+            Path(args.ohlcv), start_ts=start_ts, end_ts=end_ts
+        )
+    if candles.empty:
+        candles = _load_candles_from_db(
+            Path(args.ohlcv_db),
+            args.symbol,
+            args.timeframe,
+            lookback_days=args.lookback_days,
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+    if candles.empty:
+        raise SystemExit("無法取得 K 線資料，請確認輸入來源。")
+
+    force_rerun = bool(args.rerun_backtest)
+    params_dict: Optional[Mapping[str, object]] = None
+    trades_df = pd.DataFrame()
+    metrics_df = pd.DataFrame()
+    sections: List[Mapping[str, object]] = []
+
+    if args.dataset == "all":
+        metric_frames: List[pd.DataFrame] = []
+        trade_frames: List[pd.DataFrame] | None = [] if not force_rerun else None
+        for ds in ("train", "valid", "test"):
+            metrics_ds = _load_metrics_from_db(
+                args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts
+            )
+            if not metrics_ds.empty:
+                metrics_local = metrics_ds.copy()
+                metrics_local["dataset"] = ds
+                metric_frames.append(metrics_local.head(1))
+            if trade_frames is not None:
+                trades_ds = _load_trades_from_db(
+                    args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts
+                )
+                if not trades_ds.empty:
+                    trades_local = trades_ds.copy()
+                    trades_local["dataset"] = ds
+                    trade_frames.append(trades_local)
+        metrics_df = (
+            pd.concat(metric_frames, ignore_index=True)
+            if metric_frames
+            else pd.DataFrame()
+        )
+        if trade_frames:
+            trades_df = pd.concat(trade_frames, ignore_index=True)
+            if "entry_time" in trades_df.columns:
+                trades_df = trades_df.sort_values("entry_time").reset_index(drop=True)
+        if not metrics_df.empty:
+            metrics_df = metrics_df.reset_index(drop=True)
+    else:
+        metrics_df = _load_metrics_from_db(args, start_ts=start_ts, end_ts=end_ts)
+        if not force_rerun:
+            trades_df = _load_trades_from_db(args, start_ts=start_ts, end_ts=end_ts)
+
+    if not trades_df.empty:
+        trades_df = _filter_by_time(trades_df, "entry_time", start_ts, end_ts)
+        trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
+
+    equity_df = _build_equity_from_trades(trades_df)
+    equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
+
+    reference_start: Optional[pd.Timestamp] = start_ts
+    reference_end: Optional[pd.Timestamp] = end_ts
+    if args.dataset != "all":
+        if (
+            (reference_start is None or pd.isna(reference_start))
+            and not metrics_df.empty
+            and {"period_start", "period_end"}.issubset(metrics_df.columns)
+        ):
+            row_ref = metrics_df.iloc[0]
+            start_val = row_ref.get("period_start")
+            end_val = row_ref.get("period_end")
+            if reference_start is None:
+                reference_start = (
+                    pd.to_datetime(start_val, utc=True, errors="coerce")
+                    if start_val is not None
+                    else None
+                )
+            if reference_end is None:
+                reference_end = (
+                    pd.to_datetime(end_val, utc=True, errors="coerce")
+                    if end_val is not None
+                    else None
+                )
+        if (
+            (reference_start is None or pd.isna(reference_start))
+            and not trades_df.empty
+            and "entry_time" in trades_df.columns
+        ):
+            reference_start = pd.to_datetime(
+                trades_df["entry_time"], utc=True, errors="coerce"
+            ).min()
+        if (
+            (reference_end is None or pd.isna(reference_end))
+            and not trades_df.empty
+            and "exit_time" in trades_df.columns
+        ):
+            reference_end = pd.to_datetime(
+                trades_df["exit_time"], utc=True, errors="coerce"
+            ).max()
+
+    need_rerun = force_rerun or trades_df.empty or metrics_df.empty
+    if need_rerun:
+        if force_rerun and not (trades_df.empty and metrics_df.empty):
+            print("Forcing backtest rerun...")
+        else:
+            print("No saved data found, re-running backtest from params...")
+        bt_candles = candles
+        explicit_start = start_ts if start_ts is not None else reference_start
+        explicit_end = end_ts if end_ts is not None else reference_end
+        if explicit_start is not None or explicit_end is not None:
+            bt_candles = _filter_by_time(
+                candles, "timestamp", explicit_start, explicit_end
+            )
+            if bt_candles.empty:
+                bt_candles = candles
+        bt_trades, bt_equity, bt_metrics, params_from_bt = _run_backtest_from_params(
+            bt_candles,
+            args,
+            transaction_cost=args.transaction_cost,
+            stop_loss_pct=args.stop_loss_pct,
+        )
+        trades_df = _filter_by_time(bt_trades, "entry_time", start_ts, end_ts)
+        trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
+        if args.dataset == "all" and not trades_df.empty:
+            trades_df["dataset"] = trades_df.get("dataset", "all")
+        equity_df = _filter_by_time(bt_equity, "timestamp", start_ts, end_ts)
+        metrics_df = bt_metrics.copy()
+        if (
+            args.dataset == "all"
+            and not metrics_df.empty
+            and "dataset" not in metrics_df.columns
+        ):
+            metrics_df["dataset"] = metrics_df.get("dataset", "all")
+        if params_from_bt is not None:
+            params_dict = params_from_bt
+    if params_dict is None and args.params_db:
+        record = load_strategy_params(
+            Path(args.params_db),
+            strategy=args.strategy,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+        )
+        if record is not None and isinstance(record.params, Mapping):
+            params_dict = record.params
+
+    if metrics_df.empty and not trades_df.empty:
+        # 以交易資料估算基本績效，避免報表為空。
+        wins = (pd.to_numeric(trades_df["return"], errors="coerce") > 0).mean()
+        total_return = (
+            pd.to_numeric(trades_df["return"], errors="coerce").add(1).prod() - 1
+            if not trades_df.empty
+            else 0.0
+        )
+        metrics_df = pd.DataFrame(
+            [
+                {
+                    "trades": len(trades_df),
+                    "win_rate": float(wins) if pd.notna(wins) else 0.0,
+                    "total_return": float(total_return),
+                }
+            ]
+        )
+        if args.dataset == "all":
+            metrics_df["dataset"] = "all"
+
+    period_start: Optional[pd.Timestamp] = start_ts
+    period_end: Optional[pd.Timestamp] = end_ts
+    if args.dataset != "all":
+        if (
+            (period_start is None or pd.isna(period_start))
+            and not metrics_df.empty
+            and {"period_start", "period_end"}.issubset(metrics_df.columns)
+        ):
+            row = metrics_df.iloc[0]
+            start_val = row.get("period_start")
+            end_val = row.get("period_end")
+            if period_start is None:
+                period_start = (
+                    pd.to_datetime(start_val, utc=True, errors="coerce")
+                    if start_val is not None
+                    else None
+                )
+            if period_end is None:
+                period_end = (
+                    pd.to_datetime(end_val, utc=True, errors="coerce")
+                    if end_val is not None
+                    else None
+                )
+        if (
+            (period_start is None or pd.isna(period_start))
+            and not trades_df.empty
+            and "entry_time" in trades_df.columns
+        ):
+            period_start = pd.to_datetime(
+                trades_df["entry_time"], utc=True, errors="coerce"
+            ).min()
+        if (
+            (period_end is None or pd.isna(period_end))
+            and not trades_df.empty
+            and "exit_time" in trades_df.columns
+        ):
+            period_end = pd.to_datetime(
+                trades_df["exit_time"], utc=True, errors="coerce"
+            ).max()
+        if period_start is not None and pd.notna(period_start):
+            candles = _filter_by_time(candles, "timestamp", period_start, period_end)
+            trades_df = _filter_by_time(
+                trades_df, "entry_time", period_start, period_end
+            )
+            trades_df = _filter_by_time(
+                trades_df, "exit_time", period_start, period_end
+            )
+            equity_df = _filter_by_time(
+                equity_df, "timestamp", period_start, period_end
+            )
+
+    if args.dataset == "all" and not metrics_df.empty:
+        if {"period_start", "period_end"}.issubset(metrics_df.columns):
+            sections = []
+            for _, row in metrics_df.iterrows():
+                start_val = row.get("period_start")
+                end_val = row.get("period_end")
+                dataset_label = row.get("dataset", "Section")
+                section_start = (
+                    pd.to_datetime(start_val, utc=True, errors="coerce")
+                    if start_val is not None
+                    else None
+                )
+                section_end = (
+                    pd.to_datetime(end_val, utc=True, errors="coerce")
+                    if end_val is not None
+                    else None
+                )
+                if isinstance(section_start, pd.Timestamp) and isinstance(
+                    section_end, pd.Timestamp
+                ):
+                    if (
+                        pd.notna(section_start)
+                        and pd.notna(section_end)
+                        and section_end > section_start
+                    ):
+                        sections.append(
+                            {
+                                "label": str(dataset_label).capitalize(),
+                                "start": section_start,
+                                "end": section_end,
+                            }
+                        )
+    figures = _collect_figures(
+        candles,
+        trades_df,
+        equity_df,
+        metrics_df,
+        params_dict,
+        sections=sections if sections else None,
+    )
+    if not figures:
+        raise SystemExit("沒有可輸出的圖表或表格，請確認資料來源。")
+    _write_html(figures, Path(args.output), args.title)
+
+
+def _parse_time_boundaries(
+    start: str | None, end: str | None
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
     """解析時間區間參數。"""
     start_ts = pd.to_datetime(start, utc=True, errors="coerce") if start else None
     end_ts = pd.to_datetime(end, utc=True, errors="coerce") if end else None
@@ -62,7 +337,12 @@ def _filter_by_time(
     return frame.reset_index(drop=True)
 
 
-def _load_candles_from_csv(path: Path, *, start_ts: pd.Timestamp | None = None, end_ts: pd.Timestamp | None = None) -> pd.DataFrame:
+def _load_candles_from_csv(
+    path: Path,
+    *,
+    start_ts: pd.Timestamp | None = None,
+    end_ts: pd.Timestamp | None = None,
+) -> pd.DataFrame:
     """從 CSV 讀取 K 線資料。"""
     if not path.exists():
         raise FileNotFoundError(f"找不到 OHLCV 檔案: {path}")
@@ -108,7 +388,9 @@ def _load_candles_from_db(
     if df.empty:
         return df
     if lookback_days is not None and lookback_days > 0:
-        cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(days=lookback_days)
+        cutoff = pd.Timestamp.utcnow().tz_localize(None) - pd.Timedelta(
+            days=lookback_days
+        )
         cutoff_ms = int(cutoff.timestamp() * 1000)
         df = df[df["ts"] >= cutoff_ms]
     if df.empty:
@@ -184,7 +466,11 @@ def _load_metrics_from_db(
         metrics = _filter_by_time(metrics, "created_at", start_ts, end_ts)
         if metrics.empty:
             continue
-        return metrics.sort_values("created_at", ascending=False).head(1).reset_index(drop=True)
+        return (
+            metrics.sort_values("created_at", ascending=False)
+            .head(1)
+            .reset_index(drop=True)
+        )
     return pd.DataFrame()
 
 
@@ -226,7 +512,16 @@ def _run_backtest_from_params(
     feature_columns = payload.get("feature_columns")
     class_means = payload.get("class_means")
     class_thresholds = payload.get("class_thresholds")
-    if not all([indicator_payload, model_payload, model_path, feature_columns, class_means, class_thresholds]):
+    if not all(
+        [
+            indicator_payload,
+            model_payload,
+            model_path,
+            feature_columns,
+            class_means,
+            class_thresholds,
+        ]
+    ):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
     try:
         indicator_params = StarIndicatorParams(**indicator_payload)
@@ -250,11 +545,17 @@ def _run_backtest_from_params(
     )
     trades = result.trades.copy()
     if not trades.empty:
-        trades["entry_time"] = pd.to_datetime(trades["entry_time"], utc=True, errors="coerce")
-        trades["exit_time"] = pd.to_datetime(trades["exit_time"], utc=True, errors="coerce")
+        trades["entry_time"] = pd.to_datetime(
+            trades["entry_time"], utc=True, errors="coerce"
+        )
+        trades["exit_time"] = pd.to_datetime(
+            trades["exit_time"], utc=True, errors="coerce"
+        )
     equity = result.equity_curve.copy()
     if not equity.empty:
-        equity["timestamp"] = pd.to_datetime(equity["timestamp"], utc=True, errors="coerce")
+        equity["timestamp"] = pd.to_datetime(
+            equity["timestamp"], utc=True, errors="coerce"
+        )
     metrics_df = pd.DataFrame([result.metrics]) if result.metrics else pd.DataFrame()
     return trades, equity, metrics_df, payload
 
@@ -277,14 +578,20 @@ def _collect_figures(
         window_end = candles["timestamp"].max()
         if not trades.empty and {"entry_time", "exit_time"}.issubset(trades.columns):
             trimmed_trades = trades[
-                (trades["exit_time"] >= window_start) & (trades["entry_time"] <= window_end)
+                (trades["exit_time"] >= window_start)
+                & (trades["entry_time"] <= window_end)
             ]
         if not equity_df.empty and {"timestamp"}.issubset(equity_df.columns):
             trimmed_equity = equity_df[
-                (equity_df["timestamp"] >= window_start) & (equity_df["timestamp"] <= window_end)
+                (equity_df["timestamp"] >= window_start)
+                & (equity_df["timestamp"] <= window_end)
             ]
-        if not trimmed_trades.empty or (trimmed_equity is not None and not trimmed_equity.empty):
-            overview = build_trade_overview_figure(candles, trimmed_trades, equity=trimmed_equity, show_markers=True)
+        if not trimmed_trades.empty or (
+            trimmed_equity is not None and not trimmed_equity.empty
+        ):
+            overview = build_trade_overview_figure(
+                candles, trimmed_trades, equity=trimmed_equity, show_markers=True
+            )
         else:
             overview = build_candlestick_figure(candles, title="Price Overview")
         if sections:
@@ -293,15 +600,25 @@ def _collect_figures(
                 "rgba(244, 67, 54, 0.12)",
                 "rgba(255, 193, 7, 0.12)",
             ]
-            sorted_sections = [s for s in sections if s.get("start") is not None and s.get("end") is not None]
+            sorted_sections = [
+                s
+                for s in sections
+                if s.get("start") is not None and s.get("end") is not None
+            ]
             sorted_sections.sort(key=lambda item: item["start"])
             for idx, section in enumerate(sorted_sections):
                 section_start = section.get("start")
                 section_end = section.get("end")
                 label = section.get("label")
-                if not isinstance(section_start, pd.Timestamp) or not isinstance(section_end, pd.Timestamp):
+                if not isinstance(section_start, pd.Timestamp) or not isinstance(
+                    section_end, pd.Timestamp
+                ):
                     continue
-                if pd.isna(section_start) or pd.isna(section_end) or section_end <= section_start:
+                if (
+                    pd.isna(section_start)
+                    or pd.isna(section_end)
+                    or section_end <= section_start
+                ):
                     continue
                 color = color_cycle[idx % len(color_cycle)]
                 overview.add_vrect(
@@ -360,7 +677,11 @@ def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> 
     for heading, fig in figures:
         parts.append("<section class='report-block'>")
         parts.append(f"<h2>{heading}</h2>")
-        parts.append(fig.to_html(full_html=False, include_plotlyjs="cdn" if include_js else False))
+        parts.append(
+            fig.to_html(
+                full_html=False, include_plotlyjs="cdn" if include_js else False
+            )
+        )
         parts.append("</section>")
         include_js = False
     parts.append("</body></html>")
@@ -370,16 +691,36 @@ def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render star_xgb backtest report")
-    parser.add_argument("--ohlcv", help="含 timestamp/open/high/low/close 的 OHLCV 檔案")
-    parser.add_argument("--ohlcv-db", default="storage/market_data.db", help="儲存 OHLCV 的 SQLite 路徑")
-    parser.add_argument("--lookback-days", type=int, default=360, help="讀取資料的天數視窗")
-    parser.add_argument("--output", default="reports/star_xgb_report.html", help="輸出的 HTML 檔案路徑")
+    parser.add_argument(
+        "--ohlcv", help="含 timestamp/open/high/low/close 的 OHLCV 檔案"
+    )
+    parser.add_argument(
+        "--ohlcv-db", default="storage/market_data.db", help="儲存 OHLCV 的 SQLite 路徑"
+    )
+    parser.add_argument(
+        "--lookback-days", type=int, default=360, help="讀取資料的天數視窗"
+    )
+    parser.add_argument(
+        "--output", default="reports/star_xgb_report.html", help="輸出的 HTML 檔案路徑"
+    )
     parser.add_argument("--start", help="起始時間 (ISO 格式)")
     parser.add_argument("--end", help="結束時間 (ISO 格式)")
-    parser.add_argument("--trades-db", default="storage/strategy_state.db", help="策略交易紀錄 SQLite 檔")
-    parser.add_argument("--metrics-db", default="storage/strategy_state.db", help="策略績效摘要 SQLite 檔")
-    parser.add_argument("--params-db", default="storage/strategy_state.db", help="策略參數 SQLite 檔")
-    parser.add_argument("--strategy", default="star_xgb_default", help="策略名稱 (同 study name)")
+    parser.add_argument(
+        "--trades-db",
+        default="storage/strategy_state.db",
+        help="策略交易紀錄 SQLite 檔",
+    )
+    parser.add_argument(
+        "--metrics-db",
+        default="storage/strategy_state.db",
+        help="策略績效摘要 SQLite 檔",
+    )
+    parser.add_argument(
+        "--params-db", default="storage/strategy_state.db", help="策略參數 SQLite 檔"
+    )
+    parser.add_argument(
+        "--strategy", default="star_xgb_default", help="策略名稱 (同 study name)"
+    )
     parser.add_argument(
         "--dataset",
         default="test",
@@ -390,194 +731,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
     parser.add_argument("--title", default=TITLE_DEFAULT, help="報表標題")
-    parser.add_argument("--rerun-backtest", action="store_true", help="即使資料庫已有資料也重新回測一次")
-    parser.add_argument("--transaction-cost", type=float, default=0.0, help="回測時計入的手續費比例（例如 0.001 代表 0.1%）")
-    parser.add_argument("--stop-loss-pct", type=float, default=0.005, help="回測時套用的停損百分比（例如 0.005 代表 0.5%）")
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
-    if start_ts and end_ts and start_ts > end_ts:
-        raise SystemExit("起始時間需早於結束時間")
-
-    candles = pd.DataFrame()
-    if args.ohlcv:
-        candles = _load_candles_from_csv(Path(args.ohlcv), start_ts=start_ts, end_ts=end_ts)
-    if candles.empty:
-        candles = _load_candles_from_db(
-            Path(args.ohlcv_db),
-            args.symbol,
-            args.timeframe,
-            lookback_days=args.lookback_days,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-    if candles.empty:
-        raise SystemExit("無法取得 K 線資料，請確認輸入來源。")
-
-    force_rerun = bool(args.rerun_backtest)
-    params_dict: Optional[Mapping[str, object]] = None
-    trades_df = pd.DataFrame()
-    metrics_df = pd.DataFrame()
-    sections: List[Mapping[str, object]] = []
-
-    if args.dataset == "all":
-        metric_frames: List[pd.DataFrame] = []
-        trade_frames: List[pd.DataFrame] | None = [] if not force_rerun else None
-        for ds in ("train", "valid", "test"):
-            metrics_ds = _load_metrics_from_db(args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts)
-            if not metrics_ds.empty:
-                metrics_local = metrics_ds.copy()
-                metrics_local["dataset"] = ds
-                metric_frames.append(metrics_local.head(1))
-            if trade_frames is not None:
-                trades_ds = _load_trades_from_db(args, dataset_label=ds, start_ts=start_ts, end_ts=end_ts)
-                if not trades_ds.empty:
-                    trades_local = trades_ds.copy()
-                    trades_local["dataset"] = ds
-                    trade_frames.append(trades_local)
-        metrics_df = pd.concat(metric_frames, ignore_index=True) if metric_frames else pd.DataFrame()
-        if trade_frames:
-            trades_df = pd.concat(trade_frames, ignore_index=True)
-            if "entry_time" in trades_df.columns:
-                trades_df = trades_df.sort_values("entry_time").reset_index(drop=True)
-        if not metrics_df.empty:
-            metrics_df = metrics_df.reset_index(drop=True)
-    else:
-        metrics_df = _load_metrics_from_db(args, start_ts=start_ts, end_ts=end_ts)
-        if not force_rerun:
-            trades_df = _load_trades_from_db(args, start_ts=start_ts, end_ts=end_ts)
-
-    if not trades_df.empty:
-        trades_df = _filter_by_time(trades_df, "entry_time", start_ts, end_ts)
-        trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
-
-    equity_df = _build_equity_from_trades(trades_df)
-    equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
-
-    reference_start: Optional[pd.Timestamp] = start_ts
-    reference_end: Optional[pd.Timestamp] = end_ts
-    if args.dataset != "all":
-        if (reference_start is None or pd.isna(reference_start)) and not metrics_df.empty and {"period_start", "period_end"}.issubset(metrics_df.columns):
-            row_ref = metrics_df.iloc[0]
-            start_val = row_ref.get("period_start")
-            end_val = row_ref.get("period_end")
-            if reference_start is None:
-                reference_start = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
-            if reference_end is None:
-                reference_end = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
-        if (reference_start is None or pd.isna(reference_start)) and not trades_df.empty and "entry_time" in trades_df.columns:
-            reference_start = pd.to_datetime(trades_df["entry_time"], utc=True, errors="coerce").min()
-        if (reference_end is None or pd.isna(reference_end)) and not trades_df.empty and "exit_time" in trades_df.columns:
-            reference_end = pd.to_datetime(trades_df["exit_time"], utc=True, errors="coerce").max()
-
-    need_rerun = force_rerun or trades_df.empty or metrics_df.empty
-    if need_rerun:
-        if force_rerun and not (trades_df.empty and metrics_df.empty):
-            print("Forcing backtest rerun...")
-        else:
-            print("No saved data found, re-running backtest from params...")
-        bt_candles = candles
-        explicit_start = start_ts if start_ts is not None else reference_start
-        explicit_end = end_ts if end_ts is not None else reference_end
-        if explicit_start is not None or explicit_end is not None:
-            bt_candles = _filter_by_time(candles, "timestamp", explicit_start, explicit_end)
-            if bt_candles.empty:
-                bt_candles = candles
-        bt_trades, bt_equity, bt_metrics, params_from_bt = _run_backtest_from_params(
-            bt_candles,
-            args,
-            transaction_cost=args.transaction_cost,
-            stop_loss_pct=args.stop_loss_pct,
-        )
-        trades_df = _filter_by_time(bt_trades, "entry_time", start_ts, end_ts)
-        trades_df = _filter_by_time(trades_df, "exit_time", start_ts, end_ts)
-        if args.dataset == "all" and not trades_df.empty:
-            trades_df["dataset"] = trades_df.get("dataset", "all")
-        equity_df = _filter_by_time(bt_equity, "timestamp", start_ts, end_ts)
-        metrics_df = bt_metrics.copy()
-        if args.dataset == "all" and not metrics_df.empty and "dataset" not in metrics_df.columns:
-            metrics_df["dataset"] = metrics_df.get("dataset", "all")
-        if params_from_bt is not None:
-            params_dict = params_from_bt
-    if params_dict is None and args.params_db:
-        record = load_strategy_params(
-            Path(args.params_db),
-            strategy=args.strategy,
-            symbol=args.symbol,
-            timeframe=args.timeframe,
-        )
-        if record is not None and isinstance(record.params, Mapping):
-            params_dict = record.params
-
-    if metrics_df.empty and not trades_df.empty:
-        # 以交易資料估算基本績效，避免報表為空。
-        wins = (pd.to_numeric(trades_df["return"], errors="coerce") > 0).mean()
-        total_return = pd.to_numeric(trades_df["return"], errors="coerce").add(1).prod() - 1 if not trades_df.empty else 0.0
-        metrics_df = pd.DataFrame(
-            [
-                {
-                    "trades": len(trades_df),
-                    "win_rate": float(wins) if pd.notna(wins) else 0.0,
-                    "total_return": float(total_return),
-                }
-            ]
-        )
-        if args.dataset == "all":
-            metrics_df["dataset"] = "all"
-
-    period_start: Optional[pd.Timestamp] = start_ts
-    period_end: Optional[pd.Timestamp] = end_ts
-    if args.dataset != "all":
-        if (period_start is None or pd.isna(period_start)) and not metrics_df.empty and {"period_start", "period_end"}.issubset(metrics_df.columns):
-            row = metrics_df.iloc[0]
-            start_val = row.get("period_start")
-            end_val = row.get("period_end")
-            if period_start is None:
-                period_start = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
-            if period_end is None:
-                period_end = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
-        if (period_start is None or pd.isna(period_start)) and not trades_df.empty and "entry_time" in trades_df.columns:
-            period_start = pd.to_datetime(trades_df["entry_time"], utc=True, errors="coerce").min()
-        if (period_end is None or pd.isna(period_end)) and not trades_df.empty and "exit_time" in trades_df.columns:
-            period_end = pd.to_datetime(trades_df["exit_time"], utc=True, errors="coerce").max()
-        if period_start is not None and pd.notna(period_start):
-            candles = _filter_by_time(candles, "timestamp", period_start, period_end)
-            trades_df = _filter_by_time(trades_df, "entry_time", period_start, period_end)
-            trades_df = _filter_by_time(trades_df, "exit_time", period_start, period_end)
-            equity_df = _filter_by_time(equity_df, "timestamp", period_start, period_end)
-
-    if args.dataset == "all" and not metrics_df.empty:
-        if {"period_start", "period_end"}.issubset(metrics_df.columns):
-            sections = []
-            for _, row in metrics_df.iterrows():
-                start_val = row.get("period_start")
-                end_val = row.get("period_end")
-                dataset_label = row.get("dataset", "Section")
-                section_start = pd.to_datetime(start_val, utc=True, errors="coerce") if start_val is not None else None
-                section_end = pd.to_datetime(end_val, utc=True, errors="coerce") if end_val is not None else None
-                if isinstance(section_start, pd.Timestamp) and isinstance(section_end, pd.Timestamp):
-                    if pd.notna(section_start) and pd.notna(section_end) and section_end > section_start:
-                        sections.append(
-                            {
-                                "label": str(dataset_label).capitalize(),
-                                "start": section_start,
-                                "end": section_end,
-                            }
-                        )
-    figures = _collect_figures(
-        candles,
-        trades_df,
-        equity_df,
-        metrics_df,
-        params_dict,
-        sections=sections if sections else None,
+    parser.add_argument(
+        "--rerun-backtest", action="store_true", help="即使資料庫已有資料也重新回測一次"
     )
-    if not figures:
-        raise SystemExit("沒有可輸出的圖表或表格，請確認資料來源。")
-    _write_html(figures, Path(args.output), args.title)
+    parser.add_argument(
+        "--transaction-cost",
+        type=float,
+        default=0.0,
+        help="回測時計入的手續費比例（例如 0.001 代表 0.1%）",
+    )
+    parser.add_argument(
+        "--stop-loss-pct",
+        type=float,
+        default=0.005,
+        help="回測時套用的停損百分比（例如 0.005 代表 0.5%）",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

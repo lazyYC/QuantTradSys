@@ -1,6 +1,4 @@
-﻿import logging
-from datetime import timedelta
-from typing import Optional
+import logging
 
 import pandas as pd
 
@@ -38,7 +36,9 @@ def prepare_ohlcv_frame(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
     duplicate_count = frame.duplicated(subset="timestamp").sum()
     if duplicate_count:
-        LOGGER.warning("Detected %s duplicate candles, keeping the latest values", duplicate_count)
+        LOGGER.warning(
+            "Detected %s duplicate candles, keeping the latest values", duplicate_count
+        )
         frame = frame.drop_duplicates(subset="timestamp", keep="last")
 
     offset = timeframe_to_offset(timeframe)
@@ -55,12 +55,18 @@ def prepare_ohlcv_frame(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
             int(missing_count),
             timeframe,
         )
-        price_cols = [col for col in ["open", "high", "low", "close"] if col in frame.columns]
+        price_cols = [
+            col for col in ["open", "high", "low", "close"] if col in frame.columns
+        ]
         frame[price_cols] = frame[price_cols].ffill()
         if "volume" in frame.columns:
             frame["volume"] = frame["volume"].fillna(0.0)
 
-    frame = frame.dropna(subset=["close"]).reset_index().rename(columns={"index": "timestamp"})
+    frame = (
+        frame.dropna(subset=["close"])
+        .reset_index()
+        .rename(columns={"index": "timestamp"})
+    )
     return frame
 
 

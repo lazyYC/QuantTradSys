@@ -18,16 +18,6 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_STATE_DB = Path("storage/strategy_state.db")
 
 
-def _load_params(record: StrategyRecord | None) -> Optional[MeanReversionParams]:
-    if record is None:
-        return None
-    try:
-        return MeanReversionParams(**record.params)
-    except TypeError as exc:  # noqa: BLE001
-        LOGGER.error("Parameter record malformed: params=%s", record.params)
-        raise exc
-
-
 def run_realtime_cycle(
     symbol: str,
     *,
@@ -48,7 +38,9 @@ def run_realtime_cycle(
     )
     params = _load_params(param_record)
     if params is None:
-        LOGGER.warning("No mean reversion parameters stored for %s %s", symbol, timeframe)
+        LOGGER.warning(
+            "No mean reversion parameters stored for %s %s", symbol, timeframe
+        )
         return {"action": "HOLD", "reason": "missing_params"}
 
     raw_df = fetch_yearly_ohlcv(
@@ -69,9 +61,13 @@ def run_realtime_cycle(
         symbol=symbol,
         timeframe=timeframe,
     )
-    runtime_state = MeanReversionRuntimeState.from_dict(runtime_record.state if runtime_record else None)
+    runtime_state = MeanReversionRuntimeState.from_dict(
+        runtime_record.state if runtime_record else None
+    )
 
-    action, context, new_state = generate_realtime_decision(cleaned, params, state=runtime_state)
+    action, context, new_state = generate_realtime_decision(
+        cleaned, params, state=runtime_state
+    )
     context.update({"strategy": strategy, "symbol": symbol, "timeframe": timeframe})
     LOGGER.info("Realtime action=%s context=%s", action, context)
 
@@ -88,6 +84,16 @@ def run_realtime_cycle(
         )
 
     return {"action": action, "context": context, "state": new_state.to_dict()}
+
+
+def _load_params(record: StrategyRecord | None) -> Optional[MeanReversionParams]:
+    if record is None:
+        return None
+    try:
+        return MeanReversionParams(**record.params)
+    except TypeError as exc:  # noqa: BLE001
+        LOGGER.error("Parameter record malformed: params=%s", record.params)
+        raise exc
 
 
 __all__ = ["run_realtime_cycle", "DEFAULT_STATE_DB"]

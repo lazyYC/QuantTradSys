@@ -1,5 +1,5 @@
-
 """star_xgb 策略的資料集建構工具。"""
+
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
@@ -26,7 +26,7 @@ def build_training_dataset(
     df["q25"] = class_thresholds.get("q25", 0.0)
     df["q75"] = class_thresholds.get("q75", 0.0)
     df["q90"] = class_thresholds.get("q90", 0.0)
-    #select some columns and print them
+    # select some columns and print them
     # df2 = df[["close", "future_short_return", "future_long_return", "return_class", "candidate", "q10", "q25", "q75", "q90"]]
     # print(df2.head(50))
     return df

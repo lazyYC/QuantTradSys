@@ -1,4 +1,5 @@
 """Realtime engine for star_xgb strategy driven by Binance WebSocket closed klines."""
+
 from __future__ import annotations
 
 import argparse
@@ -24,7 +25,11 @@ from persistence.runtime_store import load_runtime_state, save_runtime_state
 from strategies.data_utils import prepare_ohlcv_frame, timeframe_to_offset
 from strategies.star_xgb.features import StarFeatureCache
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
-from strategies.star_xgb.runtime import StarRuntimeState, generate_realtime_signal, load_star_model
+from strategies.star_xgb.runtime import (
+    StarRuntimeState,
+    generate_realtime_signal,
+    load_star_model,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,10 +41,48 @@ YELLOW = "\033[33m"
 RESET = "\033[0m"
 
 
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="star_xgb realtime engine (websocket driven)"
+    )
+    parser.add_argument("--symbol", type=str, default="BTC/USDT")
+    parser.add_argument("--timeframe", type=str, default="5m")
+    parser.add_argument(
+        "--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)"
+    )
+    parser.add_argument(
+        "--lookback-days", type=int, default=30, help="初始化時載入的歷史天數"
+    )
+    parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
+    parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
+    parser.add_argument("--ohlcv-db", type=Path, default=DEFAULT_MARKET_DB)
+    parser.add_argument("--exchange", type=str, default="binance")
+    parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
+    args = parser.parse_args()
+
+    _configure_logging(args.log_path)
+
+    engine = StarRealtimeEngine(
+        symbol=args.symbol,
+        timeframe=args.timeframe,
+        strategy=args.strategy,
+        lookback_days=args.lookback_days,
+        params_store_path=args.params_db,
+        state_store_path=args.state_db,
+        market_db_path=args.ohlcv_db,
+        exchange=args.exchange,
+    )
+    engine.start()
+
+
 def _configure_logging(log_path: Path) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-    handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    )
+    handler = RotatingFileHandler(
+        log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+    )
     console = logging.StreamHandler()
     handler.setFormatter(formatter)
     console.setFormatter(formatter)
@@ -91,7 +134,9 @@ class StarRealtimeEngine:
         self.exchange = exchange
         self.exchange_config = exchange_config
 
-        record = load_strategy_params(self.params_store_path, strategy, symbol, timeframe)
+        record = load_strategy_params(
+            self.params_store_path, strategy, symbol, timeframe
+        )
         if record is None or not isinstance(record.params, dict):
             raise RuntimeError(f"策略 {strategy} 缺少已儲存參數")
 
@@ -101,7 +146,9 @@ class StarRealtimeEngine:
         model_path = payload.get("model_path")
         feature_columns = payload.get("feature_columns")
         class_means = payload.get("class_means")
-        if not all([indicator_payload, model_payload, model_path, feature_columns, class_means]):
+        if not all(
+            [indicator_payload, model_payload, model_path, feature_columns, class_means]
+        ):
             raise RuntimeError(f"策略 {strategy} 儲存參數不完整")
 
         self.indicator = StarIndicatorParams(**indicator_payload)
@@ -110,8 +157,12 @@ class StarRealtimeEngine:
         self.class_means = class_means
         self.model = load_star_model(model_path)
 
-        runtime_record = load_runtime_state(self.state_store_path, strategy, symbol, timeframe)
-        self.runtime_state = StarRuntimeState.from_dict(runtime_record.state if runtime_record else None)
+        runtime_record = load_runtime_state(
+            self.state_store_path, strategy, symbol, timeframe
+        )
+        self.runtime_state = StarRuntimeState.from_dict(
+            runtime_record.state if runtime_record else None
+        )
 
         LOGGER.info("初始化 OHLCV 資料 (REST)")
         raw_df = fetch_yearly_ohlcv(
@@ -249,34 +300,6 @@ class StarRealtimeEngine:
                 state=new_state.to_dict(),
             )
             self.runtime_state = new_state
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="star_xgb realtime engine (websocket driven)")
-    parser.add_argument("--symbol", type=str, default="BTC/USDT")
-    parser.add_argument("--timeframe", type=str, default="5m")
-    parser.add_argument("--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)")
-    parser.add_argument("--lookback-days", type=int, default=30, help="初始化時載入的歷史天數")
-    parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
-    parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
-    parser.add_argument("--ohlcv-db", type=Path, default=DEFAULT_MARKET_DB)
-    parser.add_argument("--exchange", type=str, default="binance")
-    parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
-    args = parser.parse_args()
-
-    _configure_logging(args.log_path)
-
-    engine = StarRealtimeEngine(
-        symbol=args.symbol,
-        timeframe=args.timeframe,
-        strategy=args.strategy,
-        lookback_days=args.lookback_days,
-        params_store_path=args.params_db,
-        state_store_path=args.state_db,
-        market_db_path=args.ohlcv_db,
-        exchange=args.exchange,
-    )
-    engine.start()
 
 
 if __name__ == "__main__":

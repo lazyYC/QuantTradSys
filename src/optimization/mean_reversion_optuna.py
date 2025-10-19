@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -18,7 +18,11 @@ from persistence.trade_store import (
     prune_strategy_trades,
     save_trades,
 )
-from pipelines.mean_reversion import MeanReversionGrid, TrainTestResult, split_train_test
+from pipelines.mean_reversion import (
+    MeanReversionGrid,
+    TrainTestResult,
+    split_train_test,
+)
 from strategies.data_utils import prepare_ohlcv_frame
 from strategies.mean_reversion import (
     MeanReversionFeatureCache,
@@ -33,79 +37,10 @@ PERIODS_PER_YEAR = int(365 * 24 * 60 / 5)
 RESULT_GUARD_DIR = Path("storage/optuna_result_flags")
 
 
-def _has_pending_trials(study: optuna.Study) -> bool:
-    try:
-        pending = study.get_trials(deepcopy=False, states=(TrialState.RUNNING, TrialState.WAITING))
-    except Exception:  # noqa: BLE001
-        return True
-    return bool(pending)
-
-
-def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
-    if not study_name:
-        return True
-    guard_dir.mkdir(parents=True, exist_ok=True)
-    guard_path = guard_dir / f"{study_name}.flag"
-    try:
-        fd = os.open(guard_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(datetime.now(timezone.utc).isoformat())
-    return True
-
-
-def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
-    if _has_pending_trials(study):
-        return False
-    if guard_dir is None:
-        return True
-    return _acquire_result_guard(study.study_name, guard_dir)
-
-
 @dataclass
 class OptimizationResult:
     study: optuna.Study
     train_test: TrainTestResult
-
-
-
-def _build_cache(df: pd.DataFrame, grid: MeanReversionGrid) -> MeanReversionFeatureCache:
-    return MeanReversionFeatureCache(
-        df,
-        sma_windows=sorted({int(v) for v in grid.sma_windows}),
-        atr_windows=sorted({int(v) for v in grid.atr_windows}),
-        volume_windows=sorted({int(v) for v in grid.volume_windows}),
-        pattern_windows=sorted({int(v) for v in grid.pattern_mins}),
-    )
-
-
-def _suggest_params(trial: optuna.Trial) -> MeanReversionParams:
-    return MeanReversionParams(
-        sma_window=trial.suggest_int("sma_window", 20, 80, step=5),
-        bb_std=trial.suggest_float("bb_std", 1.5, 3.0, step=0.1),
-        atr_window=trial.suggest_int("atr_window", 14, 40, step=2),
-        atr_mult=trial.suggest_float("atr_mult", 0.3, 2.0, step=0.1),
-        entry_zscore=trial.suggest_float("entry_zscore", 0.8, 3.0, step=0.1),
-        volume_window=trial.suggest_int("volume_window", 20, 120, step=10),
-        volume_z=trial.suggest_float("volume_z", 0.0, 1.5, step=0.1),
-        pattern_min=trial.suggest_int("pattern_min", 1, 5),
-        stop_loss_mult=trial.suggest_float("stop_loss_mult", 1.0, 3.0, step=0.1),
-        exit_zscore=trial.suggest_float("exit_zscore", 0.0, 1.0, step=0.1),
-    )
-
-
-def _report_pruner(trial: optuna.Trial, equity_df: pd.DataFrame, n_steps: int = 5) -> None:
-    if equity_df.empty:
-        trial.report(-1.0, step=0)
-        return
-    total = len(equity_df)
-    for step in range(1, n_steps + 1):
-        idx = min(int(total * step / n_steps) - 1, total - 1)
-        value = float(equity_df["equity"].iloc[idx] - 1)
-        trial.report(value, step=step)
-        if trial.should_prune():
-            raise optuna.TrialPruned()
 
 
 def optimize_mean_reversion(
@@ -129,7 +64,9 @@ def optimize_mean_reversion(
     result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
 ) -> OptimizationResult:
     sampler = sampler or optuna.samplers.TPESampler(multivariate=True, group=True)
-    pruner = pruner or optuna.pruners.MedianPruner(n_startup_trials=20, n_warmup_steps=2)
+    pruner = pruner or optuna.pruners.MedianPruner(
+        n_startup_trials=20, n_warmup_steps=2
+    )
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
@@ -150,7 +87,9 @@ def optimize_mean_reversion(
     cleaned = prepare_ohlcv_frame(raw_df, timeframe)
     train_df, test_df = split_train_test(cleaned)
     if train_df.empty or test_df.empty:
-        raise ValueError("Insufficient data for optimization; adjust lookback or timeframe")
+        raise ValueError(
+            "Insufficient data for optimization; adjust lookback or timeframe"
+        )
 
     search_grid = grid or MeanReversionGrid(
         sma_windows=range(20, 81, 5),
@@ -174,21 +113,39 @@ def optimize_mean_reversion(
         result = backtest_mean_reversion(train_df, params, feature_cache=train_cache)
         equity_df = result.equity_curve
         _report_pruner(trial, equity_df)
-        score = result.metrics["annualized_return"] - 0.5 * result.metrics["max_drawdown"]
+        score = (
+            result.metrics["annualized_return"] - 0.5 * result.metrics["max_drawdown"]
+        )
         return score
 
     study.optimize(objective, n_trials=n_trials, timeout=timeout, n_jobs=n_jobs)
 
     best_params_dict = study.best_trial.user_attrs["params"]
-    best_params = MeanReversionParams(**{k: int(v) if "window" in k or k == "pattern_min" or k == "atr_window" else float(v) for k, v in best_params_dict.items()})
+    best_params = MeanReversionParams(
+        **{
+            k: int(v)
+            if "window" in k or k == "pattern_min" or k == "atr_window"
+            else float(v)
+            for k, v in best_params_dict.items()
+        }
+    )
 
-    train_result = backtest_mean_reversion(train_df, best_params, feature_cache=train_cache)
-    test_result = backtest_mean_reversion(test_df, best_params, feature_cache=test_cache)
-    train_test = TrainTestResult(best_params=best_params, train=train_result, test=test_result, rankings=[])
+    train_result = backtest_mean_reversion(
+        train_df, best_params, feature_cache=train_cache
+    )
+    test_result = backtest_mean_reversion(
+        test_df, best_params, feature_cache=test_cache
+    )
+    train_test = TrainTestResult(
+        best_params=best_params, train=train_result, test=test_result, rankings=[]
+    )
 
     should_persist = _should_persist_results(study, result_guard_dir)
     if not should_persist:
-        LOGGER.info("Skip persisting results for study %s due to guard or pending trials", study.study_name)
+        LOGGER.info(
+            "Skip persisting results for study %s due to guard or pending trials",
+            study.study_name,
+        )
         return OptimizationResult(study=study, train_test=train_test)
 
     run_id = None
@@ -244,6 +201,75 @@ def optimize_mean_reversion(
 __all__ = ["OptimizationResult", "optimize_mean_reversion"]
 
 
+def _has_pending_trials(study: optuna.Study) -> bool:
+    try:
+        pending = study.get_trials(
+            deepcopy=False, states=(TrialState.RUNNING, TrialState.WAITING)
+        )
+    except Exception:  # noqa: BLE001
+        return True
+    return bool(pending)
 
 
+def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
+    if not study_name:
+        return True
+    guard_dir.mkdir(parents=True, exist_ok=True)
+    guard_path = guard_dir / f"{study_name}.flag"
+    try:
+        fd = os.open(guard_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(datetime.now(timezone.utc).isoformat())
+    return True
 
+
+def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
+    if _has_pending_trials(study):
+        return False
+    if guard_dir is None:
+        return True
+    return _acquire_result_guard(study.study_name, guard_dir)
+
+
+def _build_cache(
+    df: pd.DataFrame, grid: MeanReversionGrid
+) -> MeanReversionFeatureCache:
+    return MeanReversionFeatureCache(
+        df,
+        sma_windows=sorted({int(v) for v in grid.sma_windows}),
+        atr_windows=sorted({int(v) for v in grid.atr_windows}),
+        volume_windows=sorted({int(v) for v in grid.volume_windows}),
+        pattern_windows=sorted({int(v) for v in grid.pattern_mins}),
+    )
+
+
+def _suggest_params(trial: optuna.Trial) -> MeanReversionParams:
+    return MeanReversionParams(
+        sma_window=trial.suggest_int("sma_window", 20, 80, step=5),
+        bb_std=trial.suggest_float("bb_std", 1.5, 3.0, step=0.1),
+        atr_window=trial.suggest_int("atr_window", 14, 40, step=2),
+        atr_mult=trial.suggest_float("atr_mult", 0.3, 2.0, step=0.1),
+        entry_zscore=trial.suggest_float("entry_zscore", 0.8, 3.0, step=0.1),
+        volume_window=trial.suggest_int("volume_window", 20, 120, step=10),
+        volume_z=trial.suggest_float("volume_z", 0.0, 1.5, step=0.1),
+        pattern_min=trial.suggest_int("pattern_min", 1, 5),
+        stop_loss_mult=trial.suggest_float("stop_loss_mult", 1.0, 3.0, step=0.1),
+        exit_zscore=trial.suggest_float("exit_zscore", 0.0, 1.0, step=0.1),
+    )
+
+
+def _report_pruner(
+    trial: optuna.Trial, equity_df: pd.DataFrame, n_steps: int = 5
+) -> None:
+    if equity_df.empty:
+        trial.report(-1.0, step=0)
+        return
+    total = len(equity_df)
+    for step in range(1, n_steps + 1):
+        idx = min(int(total * step / n_steps) - 1, total - 1)
+        value = float(equity_df["equity"].iloc[idx] - 1)
+        trial.report(value, step=step)
+        if trial.should_prune():
+            raise optuna.TrialPruned()

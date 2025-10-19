@@ -1,5 +1,5 @@
-
 """star_xgb 策略的標籤建構。"""
+
 from __future__ import annotations
 
 from typing import Dict, Optional, Tuple
@@ -19,7 +19,15 @@ def build_label_frame(
     thresholds: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """根據特徵資料建立多分類標籤與報酬欄位。"""
-    required = {"timestamp", "close", "low", "high", "upper_shadow_ratio", "body_ratio", "volume_ratio"}
+    required = {
+        "timestamp",
+        "close",
+        "low",
+        "high",
+        "upper_shadow_ratio",
+        "body_ratio",
+        "volume_ratio",
+    }
     missing = required.difference(features.columns)
     if missing:
         raise ValueError(f"標籤建構缺少欄位: {sorted(missing)}")
@@ -46,7 +54,12 @@ def build_label_frame(
             thresholds = {"q10": 0.0, "q25": 0.0, "q75": 0.0, "q90": 0.0}
         else:
             q10, q25, q75, q90 = np.quantile(valid_returns, [0.1, 0.25, 0.75, 0.9])
-            thresholds = {"q10": float(q10), "q25": float(q25), "q75": float(q75), "q90": float(q90)}
+            thresholds = {
+                "q10": float(q10),
+                "q25": float(q25),
+                "q75": float(q75),
+                "q90": float(q90),
+            }
     else:
         thresholds = {
             "q10": float(thresholds.get("q10", 0.0)),

@@ -1,4 +1,5 @@
 """Lightweight Binance WebSocket utilities for kline subscriptions."""
+
 from __future__ import annotations
 
 import json
@@ -48,9 +49,13 @@ class BinanceKlineSubscriber:
             LOGGER.warning("Subscriber already running")
             return
         self._running.set()
-        self._thread = threading.Thread(target=self._run_loop, name="BinanceKlineSubscriber", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run_loop, name="BinanceKlineSubscriber", daemon=True
+        )
         self._thread.start()
-        LOGGER.info("Started Binance kline subscriber for %s %s", self.symbol, self.timeframe)
+        LOGGER.info(
+            "Started Binance kline subscriber for %s %s", self.symbol, self.timeframe
+        )
 
     def stop(self) -> None:
         self._running.clear()
@@ -62,7 +67,9 @@ class BinanceKlineSubscriber:
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
-        LOGGER.info("Stopped Binance kline subscriber for %s %s", self.symbol, self.timeframe)
+        LOGGER.info(
+            "Stopped Binance kline subscriber for %s %s", self.symbol, self.timeframe
+        )
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -110,7 +117,9 @@ class BinanceKlineSubscriber:
     def _handle_error(self, _ws: websocket.WebSocketApp, error: Exception) -> None:
         LOGGER.warning("WebSocket error: %s", error)
 
-    def _handle_close(self, _ws: websocket.WebSocketApp, status_code: int, msg: str) -> None:
+    def _handle_close(
+        self, _ws: websocket.WebSocketApp, status_code: int, msg: str
+    ) -> None:
         LOGGER.info("WebSocket closed (%s) %s", status_code, msg)
 
 
