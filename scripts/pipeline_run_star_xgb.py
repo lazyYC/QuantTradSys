@@ -109,7 +109,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run star_xgb strategy optimization with Optuna"
     )
-    parser.add_argument("--symbol", type=str, default="BTC/USDT")
+    parser.add_argument("--symbol", type=str, default="BTC/USD")
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument("--lookback-days", type=int, default=360)
     parser.add_argument("--test-days", type=int, default=30)

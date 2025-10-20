@@ -19,7 +19,7 @@
            --ohlcv-db storage/market_data.db \
            --trades-db storage/strategy_state.db \
            --metrics-db storage/strategy_state.db \
-           --symbol BTC/USDT --timeframe 5m \
+           --symbol BTC/USD --timeframe 5m \
            --start 2025-01-01T00:00Z --end 2025-01-07T23:55Z \
            --output reports/mean_rev_latest.html
        ```

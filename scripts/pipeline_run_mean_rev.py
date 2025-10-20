@@ -22,7 +22,7 @@ def main() -> None:
     parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--lookback-days", type=int, default=400)
     parser.add_argument("--timeframe", type=str, default="5m")
-    parser.add_argument("--symbol", type=str, default="BTC/USDT")
+    parser.add_argument("--symbol", type=str, default="BTC/USD")
     parser.add_argument(
         "--params-store-path", type=Path, default=Path("storage/strategy_state.db")
     )

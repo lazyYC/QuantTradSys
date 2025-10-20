@@ -727,7 +727,7 @@ def parse_args() -> argparse.Namespace:
         choices=["train", "valid", "test", "all"],
         help="選擇要呈現的資料集（train / valid / test / all）",
     )
-    parser.add_argument("--symbol", default="BTC/USDT", help="交易對")
+    parser.add_argument("--symbol", default="BTC/USD", help="交易對")
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
     parser.add_argument("--title", default=TITLE_DEFAULT, help="報表標題")

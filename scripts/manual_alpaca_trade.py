@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=["ENTER_LONG", "EXIT_LONG", "ENTER_SHORT", "EXIT_SHORT"],
     )
-    parser.add_argument("--symbol", default="BTC/USDT", help="Trading symbol")
+    parser.add_argument("--symbol", default="BTC/USD", help="Trading symbol")
     parser.add_argument(
         "--order-ratio",
         type=float,

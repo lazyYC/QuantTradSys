@@ -23,7 +23,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Backfill OHLCV data into SQLite store"
     )
-    parser.add_argument("symbol", help="symbol, e.g. BTC/USDT")
+    parser.add_argument("symbol", help="symbol, e.g. BTC/USD")
     parser.add_argument("timeframe", help="timeframe, e.g. 5m")
     parser.add_argument("lookback_days", type=int, help="days to backfill")
     parser.add_argument(
