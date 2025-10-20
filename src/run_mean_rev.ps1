@@ -10,7 +10,7 @@ $env:PYTHONPATH = 'src'
 
 $baseArgs = @(
     "scripts/pipeline_run_mean_rev.py",
-    "--symbol", "BTC/USDT",
+    "--symbol", "BTC/USD",
     "--timeframe", "5m",
     "--lookback-days", "400",
     "--n-trials", "5000",

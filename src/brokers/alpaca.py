@@ -113,6 +113,10 @@ class AlpacaPaperTradingClient:
         """Return account status and balances."""
         return self._get("/v2/account")
 
+    def get_asset(self, symbol: str) -> Dict[str, Any]:
+        """Retrieve metadata for an asset by symbol or ID."""
+        return self._get(f"/v2/assets/{symbol}")
+
     def _get(
         self, path: str, *, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:

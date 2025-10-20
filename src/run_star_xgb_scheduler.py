@@ -45,7 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="star_xgb realtime engine (websocket driven)"
     )
-    parser.add_argument("--symbol", type=str, default="BTC/USDT")
+    parser.add_argument("--symbol", type=str, default="BTC/USD")
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument(
         "--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)"
@@ -288,10 +288,16 @@ class StarRealtimeEngine:
 
         colored_action = f"{YELLOW}{action}{RESET}"
         LOGGER.info("star_xgb action=%s details=%s", colored_action, context)
+        trade_executed = True
         if action != "HOLD":
-            dispatch_signal(action, context)
+            trade_executed = dispatch_signal(action, context)
+            if not trade_executed:
+                LOGGER.warning(
+                    "Dispatch reported no execution for action=%s; runtime state unchanged",
+                    action,
+                )
 
-        if new_state != self.runtime_state:
+        if trade_executed and new_state != self.runtime_state:
             save_runtime_state(
                 self.state_store_path,
                 strategy=self.strategy,

@@ -29,18 +29,21 @@ class DispatcherTests(TestCase):
     def test_dispatch_signal_invokes_trading(
         self, mock_execute: mock.MagicMock, mock_post: mock.MagicMock
     ) -> None:
-        dispatcher.dispatch_signal(
+        mock_execute.return_value = True
+        result = dispatcher.dispatch_signal(
             "ENTER_LONG",
-            {"symbol": "BTC/USDT", "price": 30000.0},
+            {"symbol": "BTC/USD", "price": 30000.0},
             env_path=SRC_DIR / "config" / ".env",
         )
         mock_execute.assert_called_once()
         mock_post.assert_called_once()
+        self.assertTrue(result)
 
     def test_normalize_symbol_variants(self) -> None:
         self.assertEqual(dispatcher._normalize_symbol("BTC-USDT"), "BTC/USD")
         self.assertEqual(dispatcher._normalize_symbol("btcusd"), "BTC/USD")
         self.assertEqual(dispatcher._normalize_symbol(None), "BTC/USD")
+        self.assertEqual(dispatcher.format_alpaca_symbol("BTC/USD"), "BTCUSD")
 
 
 if __name__ == "__main__":

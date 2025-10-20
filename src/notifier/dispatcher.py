@@ -1,13 +1,14 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import ccxt
 import requests
 
 from brokers import AlpacaAPIError, AlpacaCredentials, AlpacaPaperTradingClient
 from config.env import DEFAULT_ENV_PATH, load_env
+from utils.symbols import canonicalize_symbol, to_alpaca_symbol, to_exchange_symbol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -20,12 +21,12 @@ def dispatch_signal(
     context: Dict[str, Any],
     *,
     env_path: Optional[Path] = None,
-) -> None:
+) -> bool:
     """Dispatch strategy signal to external channels."""
     LOGGER.info("Dispatch signal=%s context=%s", action, context)
     load_env(env_path or DEFAULT_ENV_PATH)
     if action.upper() == "HOLD":
-        return
+        return False
 
     webhook = os.getenv("DISCORD_WEBHOOK")
     if webhook:
@@ -36,8 +37,8 @@ def dispatch_signal(
     client = get_alpaca_client(env_path=env_path)
     if client is None:
         LOGGER.debug("Alpaca client unavailable; trading step skipped")
-        return
-    execute_trading(client, action, context)
+        return False
+    return execute_trading(client, action, context)
 
 
 def execute_trading(
@@ -47,7 +48,7 @@ def execute_trading(
     action_upper = action.upper()
     success = False
     try:
-        order_symbol = _prepare_alpaca_order_symbol(symbol)
+        order_symbol = format_alpaca_symbol(symbol)
         if action_upper == "ENTER_LONG":
             notional = _resolve_order_notional(client)
             if notional <= 0:
@@ -63,8 +64,9 @@ def execute_trading(
                 time_in_force="gtc",
             )
             LOGGER.info(
-                "Submitted Alpaca LONG order | symbol=%s notional=%.2f",
+                "Submitted Alpaca LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 symbol,
+                order_symbol,
                 notional,
             )
             success = True
@@ -74,7 +76,11 @@ def execute_trading(
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
                 return False
-            LOGGER.info("Closed Alpaca LONG position | symbol=%s", symbol)
+            LOGGER.info(
+                "Closed Alpaca LONG position | feed_symbol=%s order_symbol=%s",
+                symbol,
+                order_symbol,
+            )
             success = True
         elif action_upper == "ENTER_SHORT":
             notional = _resolve_order_notional(client)
@@ -93,8 +99,9 @@ def execute_trading(
                 time_in_force="gtc",
             )
             LOGGER.info(
-                "Submitted Alpaca SHORT order | symbol=%s notional=%.2f",
+                "Submitted Alpaca SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 symbol,
+                order_symbol,
                 notional,
             )
             success = True
@@ -104,7 +111,11 @@ def execute_trading(
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
                 return False
-            LOGGER.info("Closed Alpaca SHORT position | symbol=%s", symbol)
+            LOGGER.info(
+                "Closed Alpaca SHORT position | feed_symbol=%s order_symbol=%s",
+                symbol,
+                order_symbol,
+            )
             success = True
         else:
             LOGGER.debug("Unknown trading action %s; skipping", action)
@@ -131,7 +142,8 @@ def get_latest_price(
 ) -> Optional[float]:
     """Fetch latest trade price from Binance for comparison."""
     normalized = _normalize_ccxt_symbol(symbol)
-    return _fetch_ccxt_price(normalized)
+    price, _ = _fetch_ccxt_price(normalized)
+    return price
 
 
 def _is_price_within_tolerance(context: Dict[str, Any], symbol: str) -> bool:
@@ -148,21 +160,44 @@ def _is_price_within_tolerance(context: Dict[str, Any], symbol: str) -> bool:
     except ValueError:
         tolerance = 0.005
 
-    current_price = _fetch_ccxt_price(_normalize_ccxt_symbol(symbol))
+    normalized_symbol = _normalize_ccxt_symbol(symbol)
+    current_price, ticker_meta = _fetch_ccxt_price(normalized_symbol)
     if current_price is None:
         LOGGER.warning("Unable to verify current price for %s; trade skipped", symbol)
         return False
 
     deviation = abs(current_price - signal_price_val) / signal_price_val
+    if deviation <= tolerance:
+        return True
+
+    confirmed = _confirm_price_deviation(
+        symbol,
+        signal_price_val,
+        tolerance,
+        first_price=current_price,
+        ticker=ticker_meta,
+    )
+    if confirmed is None:
+        return False
+
+    deviation, latest_price, details = confirmed
     if deviation > tolerance:
         LOGGER.warning(
-            "Price deviation %.4f exceeds tolerance %.4f (signal=%.4f, latest=%.4f); trade skipped",
+            "Price deviation %.4f exceeds tolerance %.4f (signal=%.4f, latest=%.4f, details=%s); trade skipped",
             deviation,
             tolerance,
             signal_price_val,
-            current_price,
+            latest_price,
+            details,
         )
         return False
+
+    LOGGER.info(
+        "Price deviation normalized after recheck (deviation=%.4f <= tolerance %.4f, details=%s)",
+        deviation,
+        tolerance,
+        details,
+    )
     return True
 
 
@@ -179,20 +214,19 @@ def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
 
 
 def _normalize_symbol(symbol: Optional[str]) -> str:
-    if not symbol:
-        return "BTC/USDT"
-    normalized = symbol.upper().replace(" ", "")
-    if "-" in normalized:
-        normalized = normalized.replace("-", "/")
-    if "/" not in normalized and len(normalized) > 3:
-        normalized = normalized[:3] + "/" + normalized[3:]
-    return normalized
+    return canonicalize_symbol(symbol or "BTC/USD")
 
 
-def _prepare_alpaca_order_symbol(symbol: str) -> str:
-    if os.getenv("ALPACA_SYMBOL_STRIP_SLASH", "true").lower() == "true":
-        return symbol.replace("/", "")
-    return symbol
+def format_alpaca_symbol(symbol: str) -> str:
+    """Format incoming symbol for Alpaca, normalising stable-coin quotes to USD."""
+    canonical = canonicalize_symbol(symbol)
+    base, quote = canonical.split("/", 1)
+    target_quote = os.getenv("ALPACA_CRYPTO_QUOTE", "USD").upper()
+    quote = target_quote or quote
+    canonical_target = f"{base}/{quote}"
+    strip_slash = os.getenv("ALPACA_SYMBOL_STRIP_SLASH", "true").lower() == "true"
+    formatted = to_alpaca_symbol(canonical_target)
+    return formatted if strip_slash else canonical_target
 
 
 def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
@@ -243,17 +277,79 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
     return 0.0
 
 
-def _fetch_ccxt_price(symbol: str) -> Optional[float]:
+def _fetch_ccxt_price(symbol: str) -> Tuple[Optional[float], Dict[str, Any]]:
     try:
         ticker = _get_binance_client().fetch_ticker(symbol)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("Failed to fetch Binance price for %s: %s", symbol, exc)
-        return None
-    price = ticker.get("last") or ticker.get("close")
+        return None, {}
+
+    price_candidates = [
+        ticker.get("last"),
+        ticker.get("close"),
+        ticker.get("info", {}).get("lastPrice"),
+    ]
+    price = next((float(p) for p in price_candidates if p is not None), None)
     if price is None:
         LOGGER.debug("Ticker for %s missing price fields: %s", symbol, ticker)
+        return None, ticker
+    return price, ticker
+
+
+def _fetch_ccxt_mid_price(symbol: str) -> Optional[float]:
+    try:
+        order_book = _get_binance_client().fetch_order_book(symbol, limit=5)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.debug("Failed to fetch Binance order book for %s: %s", symbol, exc)
         return None
-    return float(price)
+
+    bids = order_book.get("bids") or []
+    asks = order_book.get("asks") or []
+    best_bid = bids[0][0] if bids else None
+    best_ask = asks[0][0] if asks else None
+    if best_bid is None or best_ask is None:
+        return None
+    return float(best_bid + best_ask) / 2.0
+
+
+def _confirm_price_deviation(
+    symbol: str,
+    signal_price: float,
+    tolerance: float,
+    *,
+    first_price: float,
+    ticker: Dict[str, Any],
+) -> Optional[Tuple[float, float, Dict[str, Any]]]:
+    """Re-fetch market data to confirm whether deviation is genuine."""
+    ccxt_symbol = _normalize_ccxt_symbol(symbol)
+    mid_price = _fetch_ccxt_mid_price(ccxt_symbol)
+    second_price, second_ticker = _fetch_ccxt_price(ccxt_symbol)
+    candidates = [
+        ("ticker_initial", first_price),
+        ("order_book_mid", mid_price),
+        ("ticker_second", second_price),
+    ]
+    valid = [(label, price) for label, price in candidates if price is not None]
+    if not valid:
+        LOGGER.warning(
+            "Price deviation check failed: unable to obtain confirmation quotes for %s",
+            symbol,
+        )
+        return None
+
+    label, price = min(
+        valid,
+        key=lambda item: abs(item[1] - signal_price) / signal_price,
+    )
+    deviation = abs(price - signal_price) / signal_price
+    details = {
+        "selected_source": label,
+        "selected_price": price,
+        "ticker_initial": ticker,
+        "ticker_second": second_ticker,
+        "mid_price": mid_price,
+    }
+    return deviation, price, details
 
 
 def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
@@ -284,12 +380,14 @@ def _get_binance_client() -> ccxt.Exchange:
 
 
 def _normalize_ccxt_symbol(symbol: str) -> str:
-    normalized = symbol.upper().replace(" ", "")
-    if "-" in normalized:
-        normalized = normalized.replace("-", "/")
-    if "/" not in normalized and len(normalized) > 3:
-        normalized = normalized[:3] + "/" + normalized[3:]
-    return normalized
+    exchange_id = os.getenv("CCXT_PRICE_EXCHANGE", "binance")
+    return to_exchange_symbol(symbol, exchange_id)
 
 
-__all__ = ["dispatch_signal", "execute_trading", "get_alpaca_client", "get_latest_price"]
+__all__ = [
+    "dispatch_signal",
+    "execute_trading",
+    "get_alpaca_client",
+    "get_latest_price",
+    "format_alpaca_symbol",
+]

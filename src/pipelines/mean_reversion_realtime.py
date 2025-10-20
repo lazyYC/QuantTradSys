@@ -71,10 +71,15 @@ def run_realtime_cycle(
     context.update({"strategy": strategy, "symbol": symbol, "timeframe": timeframe})
     LOGGER.info("Realtime action=%s context=%s", action, context)
 
+    trade_executed = True
     if action != "HOLD":
-        dispatch_signal(action, context)
+        trade_executed = dispatch_signal(action, context)
+        if not trade_executed:
+            LOGGER.warning(
+                "Signal %s not executed; keeping previous runtime state", action
+            )
 
-    if new_state != runtime_state:
+    if trade_executed and new_state != runtime_state:
         save_runtime_state(
             state_store_path,
             strategy=strategy,

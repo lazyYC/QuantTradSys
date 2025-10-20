@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -7,6 +7,8 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 import ccxt
 import pandas as pd
+
+from utils.symbols import canonicalize_symbol, to_exchange_symbol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +41,8 @@ def fetch_yearly_ohlcv(
 ) -> pd.DataFrame:
     """抓取約一年的 OHLCV 資料，並支援增量更新與 SQLite 儲存。"""
     configure_logging()
+    canonical_symbol = canonicalize_symbol(symbol)
+    exchange_symbol = to_exchange_symbol(symbol, exchange_id)
     exchange = create_exchange(exchange_id, exchange_config)
     utc_now = datetime.now(timezone.utc)
     end_timestamp = int(utc_now.timestamp() * 1000)
@@ -50,12 +54,12 @@ def fetch_yearly_ohlcv(
     conn: Optional[sqlite3.Connection] = None
     if db_path is not None:
         conn = ensure_database(db_path)
-        last_ts = latest_timestamp(conn, symbol, timeframe)
+        last_ts = latest_timestamp(conn, canonical_symbol, timeframe)
         LOGGER.debug("Last stored timestamp: %s", last_ts)
         with conn:
             conn.execute(
                 "DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts >= ?",
-                (symbol, timeframe, ongoing_open_ms),
+                (canonical_symbol, timeframe, ongoing_open_ms),
             )
         since_ms = max(
             window_start_ms,
@@ -65,21 +69,25 @@ def fetch_yearly_ohlcv(
         since_ms = window_start_ms
 
     if since_ms <= end_timestamp:
-        new_rows = fetch_ohlcv_batches(exchange, symbol, timeframe, since_ms, utc_now)
+        new_rows = fetch_ohlcv_batches(
+            exchange, exchange_symbol, timeframe, since_ms, utc_now
+        )
         if new_rows:
             new_rows = [row for row in new_rows if int(row[0]) < ongoing_open_ms]
     else:
-        LOGGER.info("No new candles required for %s %s", symbol, timeframe)
+        LOGGER.info("No new candles required for %s %s", canonical_symbol, timeframe)
         new_rows = []
 
     if conn is not None:
-        inserted = upsert_ohlcv_rows(conn, symbol, timeframe, new_rows)
+        inserted = upsert_ohlcv_rows(conn, canonical_symbol, timeframe, new_rows)
         LOGGER.info("Inserted %s rows into %s", inserted, db_path)
         if prune_history:
-            pruned = prune_older_rows(conn, symbol, timeframe, window_start_ms)
+            pruned = prune_older_rows(
+                conn, canonical_symbol, timeframe, window_start_ms
+            )
             if pruned:
                 LOGGER.debug("Pruned %s obsolete rows", pruned)
-        df = load_ohlcv_window(conn, symbol, timeframe, window_start_ms)
+        df = load_ohlcv_window(conn, canonical_symbol, timeframe, window_start_ms)
         conn.close()
     else:
         df = build_dataframe(new_rows)

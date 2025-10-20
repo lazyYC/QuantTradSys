@@ -11,14 +11,17 @@ from typing import Callable, Optional
 
 import websocket
 
+from utils.symbols import to_exchange_symbol
+
 LOGGER = logging.getLogger(__name__)
 
 _BINANCE_STREAM_URL = "wss://stream.binance.com:9443/ws"
 
 
 def _format_stream_symbol(symbol: str) -> str:
-    """Convert symbols like 'BTC/USDT' to 'btcusdt'."""
-    return symbol.replace("/", "").lower()
+    """Convert canonical symbols like 'BTC/USD' to Binance stream ids."""
+    mapped = to_exchange_symbol(symbol, "binance")
+    return mapped.replace("/", "").lower()
 
 
 def _build_stream_url(symbol: str, timeframe: str) -> str:
