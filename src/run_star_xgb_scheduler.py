@@ -138,8 +138,7 @@ class StarRealtimeEngine:
             self.params_store_path, strategy, symbol, timeframe
         )
         if record is None or not isinstance(record.params, dict):
-            raise RuntimeError(f"策略 {strategy} 缺少已儲存參數")
-
+            raise RuntimeError(f"找不到策略 {strategy} 的參數設定")
         payload = record.params
         indicator_payload = payload.get("indicator")
         model_payload = payload.get("model")
@@ -157,8 +156,7 @@ class StarRealtimeEngine:
                 feature_stats,
             ]
         ):
-            raise RuntimeError(f"���� {strategy} �x�s�ѼƤ�����")
-
+            raise RuntimeError(f"策略 {strategy} 的參數資料缺漏")
         self.indicator = StarIndicatorParams(**indicator_payload)
         self.model_params = StarModelParams(**model_payload)
         self.feature_columns = feature_columns

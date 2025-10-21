@@ -76,7 +76,7 @@ def train_star_model(
 
     feature_cols = list_feature_columns(prepared_dataset)
     if not feature_cols:
-        raise ValueError("�䤣��i�Ω�ؼҪ��S�x���")
+        raise ValueError("沒有可用的特徵欄位，無法訓練模型")
 
     class_means = _compute_class_means(
         train_df if not train_df.empty else prepared_dataset

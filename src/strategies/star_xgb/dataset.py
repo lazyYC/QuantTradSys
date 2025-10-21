@@ -1,4 +1,4 @@
-"""star_xgb ��������ƶ��غc�u��C"""
+"""star_xgb 策略資料集建構模組。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def build_training_dataset(
     *,
     class_thresholds: Dict[str, float],
 ) -> pd.DataFrame:
-    """�X�֯S�x�P���ҡA�^�ǱƧǫ᪺�V�m��ƪ��C"""
+    """合併特徵與標籤，產生訓練用的完整資料表。"""
     df = features.merge(labels, on="timestamp", how="inner", suffixes=("", "_label"))
     df = df.dropna(subset=["future_short_return", "future_long_return"])
     df = df.sort_values("timestamp").reset_index(drop=True)
