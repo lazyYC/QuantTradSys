@@ -125,6 +125,7 @@ def backtest_star_xgb(
         indicator_params,
         class_means,
         timeframe,
+        predicted_probs=probs,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
     )
@@ -227,6 +228,7 @@ def _build_signal_records(
     class_means: List[float],
     timeframe: str,
     *,
+    predicted_probs: Optional[np.ndarray] = None,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = None,
 ) -> pd.DataFrame:
@@ -234,8 +236,11 @@ def _build_signal_records(
     if dataset.empty:
         return pd.DataFrame()
 
-    features = dataset[feature_columns].to_numpy(dtype=float, copy=False)
-    probs = booster.predict(features)
+    if predicted_probs is None:
+        features = dataset[feature_columns].to_numpy(dtype=float, copy=False)
+        probs = booster.predict(features)
+    else:
+        probs = np.asarray(predicted_probs, dtype=float)
     probs = probs.reshape(len(dataset), -1)
 
     class_means_arr = np.asarray(class_means, dtype=float)
