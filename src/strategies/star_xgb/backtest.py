@@ -168,9 +168,12 @@ def backtest_star_xgb(
                 if baseline_index.tzinfo is None and data_start.tzinfo is not None:
                     baseline_index = baseline_index.tz_localize(data_start.tzinfo)
                 baseline = pd.Series([1.0], index=[baseline_index])
-                equity_series = (
-                    pd.concat([baseline, equity_series]).sort_index().ffill()
-                )
+                equity_series = pd.concat([baseline, equity_series]).sort_index()
+                if equity_series.index.has_duplicates:
+                    equity_series = equity_series[
+                        ~equity_series.index.duplicated(keep="last")
+                    ]
+                equity_series = equity_series.ffill()
                 day_index = pd.date_range(
                     data_start.normalize(),
                     data_end.normalize(),
