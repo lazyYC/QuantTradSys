@@ -248,6 +248,21 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
         LOGGER.warning("ALPACA_ORDER_RATIO is non-positive; trading skipped")
         return 0.0
 
+    cash_raw = account.get("cash")
+    if cash_raw is None:
+        LOGGER.warning("Alpaca account overview missing 'cash'; trading skipped")
+        return 0.0
+    try:
+        cash_balance = float(cash_raw)
+    except (TypeError, ValueError):
+        LOGGER.error("Unable to parse Alpaca cash balance: %s", cash_raw)
+        return 0.0
+    if cash_balance <= 0.0:
+        LOGGER.info("Alpaca account has no cash available for trading")
+        return 0.0
+
+    notional = cash_balance * order_ratio
+
     max_notional_raw = os.getenv("ALPACA_MAX_ORDER_NOTIONAL", "200000")
     try:
         max_notional = float(max_notional_raw)
@@ -256,25 +271,15 @@ def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
     if max_notional <= 0:
         max_notional = None
 
-    for key in ("buying_power", "cash"):
-        value = account.get(key)
-        if value is None:
-            continue
-        try:
-            amount = float(value)
-        except (TypeError, ValueError):
-            continue
-        if amount > 0:
-            notional = amount * order_ratio
-            if max_notional is not None and notional > max_notional:
-                LOGGER.debug(
-                    "Clamping order notional from %.2f to %.2f based on ALPACA_MAX_ORDER_NOTIONAL",
-                    notional,
-                    max_notional,
-                )
-                notional = max_notional
-            return notional
-    return 0.0
+    if max_notional is not None and notional > max_notional:
+        LOGGER.debug(
+            "Clamping order notional from %.2f to %.2f based on ALPACA_MAX_ORDER_NOTIONAL",
+            notional,
+            max_notional,
+        )
+        notional = max_notional
+
+    return notional
 
 
 def _fetch_ccxt_price(symbol: str) -> Tuple[Optional[float], Dict[str, Any]]:
