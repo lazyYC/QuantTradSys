@@ -39,6 +39,7 @@ def backtest_star_xgb(
     feature_columns: Optional[List[str]] = None,
     feature_stats: Optional[Dict[str, Dict[str, float]]] = None,
     *,
+    core_start: Optional[pd.Timestamp] = None,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = 0.005,
 ) -> StarBacktestResult:
@@ -81,6 +82,22 @@ def backtest_star_xgb(
     trade_stats = feature_stats.get("trade_amount") if feature_stats else None
     dataset = apply_trade_amount_scaling(dataset, trade_stats)
 
+    core_start_ts: Optional[pd.Timestamp] = None
+    if core_start is not None:
+        core_start_ts = pd.to_datetime(core_start, utc=True, errors="coerce")
+        if pd.notna(core_start_ts):
+            dataset = dataset[dataset["timestamp"] >= core_start_ts].reset_index(
+                drop=True
+            )
+    if dataset.empty:
+        return StarBacktestResult(
+            trades=pd.DataFrame(),
+            metrics={},
+            equity_curve=pd.DataFrame(),
+            period_start=core_start_ts,
+            period_end=None,
+        )
+
     booster = load_star_model(model_path)
 
     if feature_columns is None:
@@ -112,7 +129,16 @@ def backtest_star_xgb(
         stop_loss_pct=stop_loss_pct,
     )
 
+    if core_start_ts is not None and not trades.empty:
+        entry_times = pd.to_datetime(trades["entry_time"], utc=True, errors="coerce")
+        trades = trades[entry_times >= core_start_ts].reset_index(drop=True)
+
     equity_curve = _build_equity_curve(trades)
+    if core_start_ts is not None and not equity_curve.empty:
+        curve_times = pd.to_datetime(
+            equity_curve["timestamp"], utc=True, errors="coerce"
+        )
+        equity_curve = equity_curve[curve_times >= core_start_ts].reset_index(drop=True)
 
     trade_summary = _summarize_trades(trades)
     metrics.update(trade_summary)
@@ -164,7 +190,9 @@ def backtest_star_xgb(
     metrics["score"] = metrics.get("total_return", 0.0)
 
     timestamps = pd.to_datetime(ohlcv["timestamp"], utc=True, errors="coerce")
-    if timestamps.notna().any():
+    if core_start_ts is not None and pd.notna(core_start_ts):
+        period_start = core_start_ts
+    elif timestamps.notna().any():
         period_start = timestamps.min()
         period_end = timestamps.max()
     else:

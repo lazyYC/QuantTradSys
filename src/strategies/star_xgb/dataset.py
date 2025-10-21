@@ -79,6 +79,27 @@ def apply_trade_amount_scaling(
     return scaled
 
 
+def prepend_warmup_rows(
+    full_df: pd.DataFrame,
+    target_df: pd.DataFrame,
+    warmup_bars: int = DEFAULT_WARMUP_BARS,
+) -> pd.DataFrame:
+    """在切分後的資料前加入 warm-up K 線，避免指標初值偏差。"""
+    if warmup_bars <= 0 or target_df.empty or full_df.empty:
+        return target_df.copy()
+
+    core_start = target_df["timestamp"].iloc[0]
+    mask = full_df["timestamp"] >= core_start
+    if not mask.any():
+        return target_df.copy()
+    first_idx = int(mask.idxmax())
+    start_idx = max(first_idx - warmup_bars, 0)
+    warmup_slice = full_df.iloc[start_idx:first_idx]
+    if warmup_slice.empty:
+        return target_df.copy()
+    return pd.concat([warmup_slice, target_df], ignore_index=True)
+
+
 def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
     """列出可用於建模的特徵欄位（排除 meta 欄位）。"""
     excluded = {
@@ -112,5 +133,7 @@ __all__ = [
     "split_train_test",
     "compute_trade_amount_stats",
     "apply_trade_amount_scaling",
+    "prepend_warmup_rows",
+    "DEFAULT_WARMUP_BARS",
     "list_feature_columns",
 ]

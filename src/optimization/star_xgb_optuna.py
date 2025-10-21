@@ -26,7 +26,9 @@ from strategies.data_utils import prepare_ohlcv_frame
 from strategies.star_xgb.backtest import backtest_star_xgb, StarBacktestResult
 from strategies.star_xgb.dataset import (
     TARGET_COLUMN,
+    DEFAULT_WARMUP_BARS,
     build_training_dataset,
+    prepend_warmup_rows,
     split_train_test,
 )
 from strategies.star_xgb.features import StarFeatureCache
@@ -178,8 +180,47 @@ def optimize_star_xgb(
     if validation_df.empty:
         validation_df = pd.DataFrame(columns=train_df.columns)
 
+    warmup_bars = DEFAULT_WARMUP_BARS
+    train_core_start = (
+        pd.to_datetime(train_core_df["timestamp"], utc=True, errors="coerce").min()
+        if not train_core_df.empty
+        else None
+    )
+    if train_core_start is not None and pd.isna(train_core_start):
+        train_core_start = None
+    validation_start = (
+        pd.to_datetime(validation_df["timestamp"], utc=True, errors="coerce").min()
+        if not validation_df.empty
+        else None
+    )
+    if validation_start is not None and pd.isna(validation_start):
+        validation_start = None
+    test_start = (
+        pd.to_datetime(test_df["timestamp"], utc=True, errors="coerce").min()
+        if not test_df.empty
+        else None
+    )
+    if test_start is not None and pd.isna(test_start):
+        test_start = None
+
+    train_core_input = (
+        prepend_warmup_rows(train_df, train_core_df, warmup_bars)
+        if train_core_start is not None
+        else train_core_df
+    )
+    validation_input = (
+        prepend_warmup_rows(train_df, validation_df, warmup_bars)
+        if validation_start is not None
+        else validation_df
+    )
+    test_input = (
+        prepend_warmup_rows(cleaned, test_df, warmup_bars)
+        if test_start is not None
+        else test_df
+    )
+
     train_bt_result = backtest_star_xgb(
-        train_core_df,
+        train_core_input,
         training_result.indicator_params,
         training_result.model_params,
         model_path=str(training_result.model_path),
@@ -188,12 +229,13 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
+        core_start=train_core_start,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
 
     valid_bt_result = backtest_star_xgb(
-        validation_df,
+        validation_input,
         training_result.indicator_params,
         training_result.model_params,
         model_path=str(training_result.model_path),
@@ -202,12 +244,13 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
+        core_start=validation_start,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
 
     test_bt_result = backtest_star_xgb(
-        test_df,
+        test_input,
         training_result.indicator_params,
         training_result.model_params,
         model_path=str(training_result.model_path),
@@ -216,6 +259,7 @@ def optimize_star_xgb(
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
+        core_start=test_start,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
