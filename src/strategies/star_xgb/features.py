@@ -106,6 +106,8 @@ class StarFeatureCache:
         high = frame["high"].astype(float)
         low = frame["low"].astype(float)
         volume = frame["volume"].astype(float)
+        prev_close = close.shift(1)
+        safe_prev_close = prev_close.replace(0.0, np.nan)
 
         total_range = (high - low).replace(0.0, np.nan)
         upper_shadow = (high - np.maximum(close, open_)).clip(lower=0.0)
@@ -126,9 +128,10 @@ class StarFeatureCache:
         low_window = self._rolling_low[params.pattern_lookback]
 
         frame["trend_ma"] = trend_ma
-        frame["trend_slope"] = (trend_ma - trend_ma.shift(params.slope_window)) / max(
+        trend_slope = (trend_ma - trend_ma.shift(params.slope_window)) / max(
             params.slope_window, 1
         )
+        frame["trend_slope"] = trend_slope / trend_ma.replace(0.0, np.nan)
         frame["close_trend_pct"] = (close - trend_ma) / trend_ma.replace(0.0, np.nan)
         frame["atr"] = atr
         frame["atr_norm"] = atr / close.replace(0.0, np.nan)
@@ -145,12 +148,26 @@ class StarFeatureCache:
         )
         frame["range_percent"] = (high_window - low_window) / close.replace(0.0, np.nan)
 
+        frame["trade_amount"] = close * volume
+        frame["open_rel"] = (open_ - safe_prev_close) / safe_prev_close
+        frame["high_rel"] = (high - safe_prev_close) / safe_prev_close
+        frame["low_rel"] = (low - safe_prev_close) / safe_prev_close
+        frame["close_rel"] = (close - safe_prev_close) / safe_prev_close
+        for lag in range(1, 6):
+            frame[f"close_rel_lag{lag}"] = frame["close_rel"].shift(lag)
+
         frame["return_1"] = close.pct_change()
         frame["return_3"] = close.pct_change(3)
         frame["return_6"] = close.pct_change(6)
-        frame["volume_change_1"] = volume.pct_change()
+        vol_change = volume.pct_change()
+        vol_change = vol_change.replace([np.inf, -np.inf], np.nan)
+        frame["volume_change_1"] = np.sign(vol_change) * np.log1p(vol_change.abs())
         frame["shadow_diff"] = frame["upper_shadow_ratio"] - frame["lower_shadow_ratio"]
 
+        frame = frame.drop(
+            columns=["trend_ma", "rolling_high", "rolling_low", "atr", "volume"],
+            errors="ignore",
+        )
         frame = frame.dropna().reset_index(drop=True)
         return frame
 

@@ -146,15 +146,24 @@ class StarRealtimeEngine:
         model_path = payload.get("model_path")
         feature_columns = payload.get("feature_columns")
         class_means = payload.get("class_means")
+        feature_stats = payload.get("feature_stats")
         if not all(
-            [indicator_payload, model_payload, model_path, feature_columns, class_means]
+            [
+                indicator_payload,
+                model_payload,
+                model_path,
+                feature_columns,
+                class_means,
+                feature_stats,
+            ]
         ):
-            raise RuntimeError(f"策略 {strategy} 儲存參數不完整")
+            raise RuntimeError(f"���� {strategy} �x�s�ѼƤ�����")
 
         self.indicator = StarIndicatorParams(**indicator_payload)
         self.model_params = StarModelParams(**model_payload)
         self.feature_columns = feature_columns
         self.class_means = class_means
+        self.feature_stats = feature_stats
         self.model = load_star_model(model_path)
 
         runtime_record = load_runtime_state(
@@ -273,6 +282,7 @@ class StarRealtimeEngine:
             model=self.model,
             feature_columns=self.feature_columns,
             class_means=self.class_means,
+            feature_stats=self.feature_stats,
             cache=cache,
             state=self.runtime_state,
         )

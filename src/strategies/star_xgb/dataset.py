@@ -1,14 +1,16 @@
-"""star_xgb 策略的資料集建構工具。"""
+"""star_xgb ��������ƶ��غc�u��C"""
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 
 TARGET_COLUMN = "return_class"
 SAMPLE_WEIGHT_COLUMN = "sample_weight"
+DEFAULT_WARMUP_BARS = 60
 
 
 def build_training_dataset(
@@ -17,7 +19,7 @@ def build_training_dataset(
     *,
     class_thresholds: Dict[str, float],
 ) -> pd.DataFrame:
-    """合併特徵與標籤，回傳排序後的訓練資料表。"""
+    """�X�֯S�x�P���ҡA�^�ǱƧǫ᪺�V�m��ƪ��C"""
     df = features.merge(labels, on="timestamp", how="inner", suffixes=("", "_label"))
     df = df.dropna(subset=["future_short_return", "future_long_return"])
     df = df.sort_values("timestamp").reset_index(drop=True)
@@ -26,9 +28,6 @@ def build_training_dataset(
     df["q25"] = class_thresholds.get("q25", 0.0)
     df["q75"] = class_thresholds.get("q75", 0.0)
     df["q90"] = class_thresholds.get("q90", 0.0)
-    # select some columns and print them
-    # df2 = df[["close", "future_short_return", "future_long_return", "return_class", "candidate", "q10", "q25", "q75", "q90"]]
-    # print(df2.head(50))
     return df
 
 
@@ -50,6 +49,36 @@ def split_train_test(
     return train.reset_index(drop=True), test.reset_index(drop=True)
 
 
+def compute_trade_amount_stats(df: pd.DataFrame) -> Dict[str, float]:
+    """計算 trade_amount 欄位的平均與標準差。"""
+    if df.empty or "trade_amount" not in df.columns:
+        return {"mean": 0.0, "std": 1.0}
+    series = pd.to_numeric(df["trade_amount"], errors="coerce").dropna()
+    if series.empty:
+        return {"mean": 0.0, "std": 1.0}
+    mean = float(series.mean())
+    std = float(series.std(ddof=0))
+    if not np.isfinite(std) or std == 0.0:
+        std = 1.0
+    return {"mean": mean, "std": std}
+
+
+def apply_trade_amount_scaling(
+    df: pd.DataFrame, stats: Optional[Dict[str, float]]
+) -> pd.DataFrame:
+    """根據既有統計量，將 trade_amount 轉換成 z-score。"""
+    if df.empty:
+        return df.copy()
+    scaled = df.copy()
+    if "trade_amount" not in scaled.columns or not stats:
+        return scaled
+    mean = float(stats.get("mean", 0.0))
+    std = float(stats.get("std", 1.0)) or 1.0
+    scaled["trade_amount_zscore"] = (scaled["trade_amount"] - mean) / std
+    scaled = scaled.drop(columns=["trade_amount"], errors="ignore")
+    return scaled
+
+
 def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
     """列出可用於建模的特徵欄位（排除 meta 欄位）。"""
     excluded = {
@@ -67,6 +96,11 @@ def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
         "q25",
         "q75",
         "q90",
+        "trade_amount",
+        "open",
+        "high",
+        "low",
+        "close",
     }
     return [col for col in dataset.columns if col not in excluded]
 
@@ -76,5 +110,7 @@ __all__ = [
     "SAMPLE_WEIGHT_COLUMN",
     "build_training_dataset",
     "split_train_test",
+    "compute_trade_amount_stats",
+    "apply_trade_amount_scaling",
     "list_feature_columns",
 ]

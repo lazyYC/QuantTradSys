@@ -15,6 +15,8 @@ from sklearn.metrics import accuracy_score, mean_absolute_error
 from .dataset import (
     SAMPLE_WEIGHT_COLUMN,
     TARGET_COLUMN,
+    apply_trade_amount_scaling,
+    compute_trade_amount_stats,
     list_feature_columns,
 )
 from .labels import RETURN_CLASSES
@@ -36,6 +38,7 @@ class StarTrainingResult:
     rankings: List[Dict[str, object]]
     class_means: List[float]
     class_thresholds: Dict[str, float]
+    feature_stats: Dict[str, Dict[str, float]]
 
 
 def train_star_model(
@@ -53,21 +56,31 @@ def train_star_model(
     if dataset.empty:
         raise ValueError("提供的資料集為空，無法訓練模型")
 
-    feature_cols = list_feature_columns(dataset)
-    if not feature_cols:
-        raise ValueError("找不到可用於建模的特徵欄位")
-
     if valid_days <= 0:
-        train_df = dataset.copy()
-        valid_df = pd.DataFrame(columns=dataset.columns)
+        train_df_raw = dataset.copy()
+        valid_df_raw = pd.DataFrame(columns=dataset.columns)
     else:
         validation_window = max(valid_days, min_validation_days)
-        train_df, valid_df = _split_train_valid(dataset, valid_days=validation_window)
-        if train_df.empty:
-            train_df = dataset.copy()
-            valid_df = pd.DataFrame(columns=dataset.columns)
+        train_df_raw, valid_df_raw = _split_train_valid(
+            dataset, valid_days=validation_window
+        )
+        if train_df_raw.empty:
+            train_df_raw = dataset.copy()
+            valid_df_raw = pd.DataFrame(columns=dataset.columns)
 
-    class_means = _compute_class_means(train_df if not train_df.empty else dataset)
+    trade_amount_stats = compute_trade_amount_stats(train_df_raw)
+    prepared_dataset = apply_trade_amount_scaling(dataset, trade_amount_stats)
+    dataset = prepared_dataset
+    train_df = apply_trade_amount_scaling(train_df_raw, trade_amount_stats)
+    valid_df = apply_trade_amount_scaling(valid_df_raw, trade_amount_stats)
+
+    feature_cols = list_feature_columns(prepared_dataset)
+    if not feature_cols:
+        raise ValueError("�䤣��i�Ω�ؼҪ��S�x���")
+
+    class_means = _compute_class_means(
+        train_df if not train_df.empty else prepared_dataset
+    )
 
     rankings: List[Dict[str, object]] = []
     best_tuple: (
@@ -146,7 +159,7 @@ def train_star_model(
     model_path = model_dir / model_filename
     final_model.booster_.save_model(str(model_path))
 
-    threshold_source = train_df if not train_df.empty else dataset
+    threshold_source = train_df if not train_df.empty else prepared_dataset
     class_thresholds = {
         "q10": float(threshold_source["q10"].iloc[0])
         if "q10" in threshold_source.columns and not threshold_source.empty
@@ -173,6 +186,7 @@ def train_star_model(
         rankings=rankings,
         class_means=class_means.tolist(),
         class_thresholds=class_thresholds,
+        feature_stats={"trade_amount": trade_amount_stats},
     )
     return result
 

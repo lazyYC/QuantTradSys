@@ -9,7 +9,7 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .dataset import build_training_dataset, list_feature_columns
+from .dataset import apply_trade_amount_scaling, build_training_dataset, list_feature_columns
 from .features import StarFeatureCache
 from .labels import build_label_frame
 from .model import _evaluate, CLASS_VALUES, _simulate_trades, _summarize_trades
@@ -37,6 +37,7 @@ def backtest_star_xgb(
     class_means: List[float],
     class_thresholds: Dict[str, float],
     feature_columns: Optional[List[str]] = None,
+    feature_stats: Optional[Dict[str, Dict[str, float]]] = None,
     *,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = 0.005,
@@ -76,6 +77,9 @@ def backtest_star_xgb(
             period_start=None,
             period_end=None,
         )
+
+    trade_stats = feature_stats.get("trade_amount") if feature_stats else None
+    dataset = apply_trade_amount_scaling(dataset, trade_stats)
 
     booster = load_star_model(model_path)
 

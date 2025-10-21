@@ -512,6 +512,7 @@ def _run_backtest_from_params(
     feature_columns = payload.get("feature_columns")
     class_means = payload.get("class_means")
     class_thresholds = payload.get("class_thresholds")
+    feature_stats = payload.get("feature_stats")
     if not all(
         [
             indicator_payload,
@@ -520,6 +521,7 @@ def _run_backtest_from_params(
             feature_columns,
             class_means,
             class_thresholds,
+            feature_stats,
         ]
     ):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
@@ -540,6 +542,7 @@ def _run_backtest_from_params(
         class_means=list(class_means),
         class_thresholds=dict(class_thresholds),
         feature_columns=list(feature_columns),
+        feature_stats=dict(feature_stats),
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
     )

@@ -12,6 +12,7 @@ import pandas as pd
 
 from utils.formatting import round_numeric_fields
 
+from .dataset import apply_trade_amount_scaling
 from .features import StarFeatureCache
 from .model import CLASS_VALUES
 from .params import StarIndicatorParams, StarModelParams
@@ -71,6 +72,7 @@ def generate_realtime_signal(
     model: lgb.Booster,
     feature_columns: Sequence[str],
     class_means: Sequence[float],
+    feature_stats: Optional[Dict[str, Dict[str, float]]] = None,
     cache: Optional[StarFeatureCache] = None,
     state: Optional[StarRuntimeState] = None,
 ) -> Tuple[str, Dict[str, object], StarRuntimeState]:
@@ -84,6 +86,8 @@ def generate_realtime_signal(
 
     cache = cache or _build_cache_for_runtime(df, indicator_params)
     features = cache.build_features(indicator_params, df)
+    trade_stats = feature_stats.get("trade_amount") if feature_stats else None
+    features = apply_trade_amount_scaling(features, trade_stats)
     if features.empty:
         return "HOLD", {"reason": "insufficient_features"}, runtime_state
 

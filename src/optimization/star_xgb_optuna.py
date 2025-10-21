@@ -187,6 +187,7 @@ def optimize_star_xgb(
         class_means=training_result.class_means,
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
+        feature_stats=training_result.feature_stats,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
@@ -200,6 +201,7 @@ def optimize_star_xgb(
         class_means=training_result.class_means,
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
+        feature_stats=training_result.feature_stats,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
@@ -213,6 +215,7 @@ def optimize_star_xgb(
         class_means=training_result.class_means,
         class_thresholds=training_result.class_thresholds,
         feature_columns=training_result.feature_columns,
+        feature_stats=training_result.feature_stats,
         transaction_cost=TRANSACTION_COST,
         stop_loss_pct=STOP_LOSS_PCT,
     )
@@ -229,6 +232,7 @@ def optimize_star_xgb(
                 "feature_columns": training_result.feature_columns,
                 "class_means": training_result.class_means,
                 "class_thresholds": training_result.class_thresholds,
+                "feature_stats": training_result.feature_stats,
             }
             save_strategy_params(
                 params_store_path,
