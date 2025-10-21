@@ -130,6 +130,18 @@ def train_star_model(
         if not train_df.empty
         else np.empty((0, NUM_CLASSES))
     )
+    if not train_df.empty and train_probs.size:
+        train_expected = _expected_returns(train_probs, class_means)
+        train_pred_classes = CLASS_VALUES[np.argmax(train_probs, axis=1)]
+        train_trades = _simulate_trades(
+            train_df,
+            train_expected,
+            train_pred_classes,
+            best_model_params,
+            transaction_cost=transaction_cost,
+            stop_loss_pct=stop_loss_pct,
+        )
+        class_means = _calibrate_class_means(class_means, train_trades)
     train_metrics = _evaluate(
         train_df,
         train_probs,
@@ -566,6 +578,24 @@ def _compute_class_means(train_df: pd.DataFrame) -> np.ndarray:
         class_means.append(float(0.0 if pd.isna(value) else value))
     return np.asarray(class_means, dtype=float)
 
+def _calibrate_class_means(
+    base_means: np.ndarray, trades: pd.DataFrame
+) -> np.ndarray:
+    """利用模擬交易的實際報酬調整 class_means。"""
+    if trades.empty or "entry_class" not in trades or "return" not in trades:
+        return base_means
+
+    calibrated = base_means.astype(float, copy=True)
+    returns = pd.to_numeric(trades["return"], errors="coerce")
+    classes = pd.to_numeric(trades["entry_class"], errors="coerce")
+
+    for idx, label in enumerate(CLASS_VALUES):
+        mask = classes == label
+        if mask.any():
+            mean_return = returns[mask].mean()
+            if pd.notna(mean_return):
+                calibrated[idx] = float(mean_return)
+    return calibrated
 
 __all__ = [
     "StarTrainingResult",
