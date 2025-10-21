@@ -579,22 +579,38 @@ def _compute_class_means(train_df: pd.DataFrame) -> np.ndarray:
     return np.asarray(class_means, dtype=float)
 
 def _calibrate_class_means(
-    base_means: np.ndarray, trades: pd.DataFrame
+    base_means: np.ndarray,
+    trades: pd.DataFrame,
+    *,
+    smoothing: float = 0.2,
 ) -> np.ndarray:
-    """利用模擬交易的實際報酬調整 class_means。"""
-    if trades.empty or "entry_class" not in trades or "return" not in trades:
+    """利用模擬交易的平均報酬，平滑調整 class_means 但保留原本量級。"""
+    if (
+        trades.empty
+        or "entry_class" not in trades
+        or "return" not in trades
+        or smoothing <= 0.0
+    ):
         return base_means
 
     calibrated = base_means.astype(float, copy=True)
     returns = pd.to_numeric(trades["return"], errors="coerce")
     classes = pd.to_numeric(trades["entry_class"], errors="coerce")
 
+    smooth = min(max(smoothing, 0.0), 1.0)
     for idx, label in enumerate(CLASS_VALUES):
         mask = classes == label
-        if mask.any():
-            mean_return = returns[mask].mean()
-            if pd.notna(mean_return):
-                calibrated[idx] = float(mean_return)
+        if not mask.any():
+            continue
+        mean_return = returns[mask].mean()
+        if pd.isna(mean_return):
+            continue
+
+        base_value = calibrated[idx]
+        # 只在方向一致時進行平滑，避免意外顛倒多空判斷
+        if base_value == 0.0 or np.sign(base_value) == np.sign(mean_return):
+            calibrated[idx] = float((1.0 - smooth) * base_value + smooth * mean_return)
+
     return calibrated
 
 __all__ = [
