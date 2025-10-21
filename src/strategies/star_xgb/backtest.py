@@ -190,14 +190,14 @@ def backtest_star_xgb(
     metrics["score"] = metrics.get("total_return", 0.0)
 
     timestamps = pd.to_datetime(ohlcv["timestamp"], utc=True, errors="coerce")
-    if core_start_ts is not None and pd.notna(core_start_ts):
-        period_start = core_start_ts
-    elif timestamps.notna().any():
-        period_start = timestamps.min()
+    period_start: Optional[pd.Timestamp] = None
+    period_end: Optional[pd.Timestamp] = None
+    if timestamps.notna().any():
         period_end = timestamps.max()
-    else:
-        period_start = None
-        period_end = None
+        if core_start_ts is not None and pd.notna(core_start_ts):
+            period_start = core_start_ts
+        else:
+            period_start = timestamps.min()
 
     metrics["period_start"] = (
         period_start.isoformat() if isinstance(period_start, pd.Timestamp) else None
