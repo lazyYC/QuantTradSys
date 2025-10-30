@@ -79,6 +79,7 @@ Thumbs.db
 !*.example.json
 *.pkl
 *joblib
+*.ipynb
 
 /storage/
 /data/
