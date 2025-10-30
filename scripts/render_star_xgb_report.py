@@ -9,6 +9,7 @@ from typing import List, Mapping, Optional, Tuple
 
 import pandas as pd
 import sys
+import os
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -20,6 +21,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+FAVICON_PATH = SRC_DIR / "config" / "favicon.png"
 
 from reporting.mean_reversion_report import (  # noqa: E402
     create_metrics_table,
@@ -39,6 +42,7 @@ TITLE_DEFAULT = "Star XGB Report"
 
 def main() -> None:
     args = parse_args()
+    args.title = args.strategy
     start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
     if start_ts and end_ts and start_ts > end_ts:
         raise SystemExit("起始時間需早於結束時間")
@@ -664,9 +668,23 @@ def _collect_figures(
 
 def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> None:
     """輸出 HTML 報表。"""
+    favicon_href: Optional[str] = None
+    if FAVICON_PATH.exists():
+        try:
+            rel_path = os.path.relpath(FAVICON_PATH, output.parent)
+            favicon_href = rel_path.replace("\\", "/")
+        except ValueError:
+            favicon_href = FAVICON_PATH.resolve().as_posix()
+
     parts = [
-        "<html><head><meta charset='utf-8'>",
+        "<html><head>",
+        "<meta charset='utf-8'>",
         f"<title>{title}</title>",
+    ]
+    if favicon_href:
+        parts.append(f"<link rel='icon' href='{favicon_href}' type='image/png'>")
+
+    parts.extend([
         (
             "<style>body{font-family:Segoe UI,system-ui,sans-serif;margin:24px;}"
             "h1{margin-bottom:16px;}h2{margin:0 0 12px;}"
@@ -675,7 +693,8 @@ def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> 
         ),
         "</head><body>",
         f"<h1>{title}</h1>",
-    ]
+    ])
+
     include_js = True
     for heading, fig in figures:
         parts.append("<section class='report-block'>")
@@ -733,7 +752,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--symbol", default="BTC/USD", help="交易對")
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
-    parser.add_argument("--title", default=TITLE_DEFAULT, help="報表標題")
     parser.add_argument(
         "--rerun-backtest", action="store_true", help="即使資料庫已有資料也重新回測一次"
     )
@@ -746,8 +764,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stop-loss-pct",
         type=float,
-        default=0.005,
-        help="回測時套用的停損百分比（例如 0.005 代表 0.5%）",
+        default=0.01,
+        help="回測時套用的停損百分比（例如 0.01 代表 1%）",
     )
     return parser.parse_args()
 
