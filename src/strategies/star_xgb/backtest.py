@@ -115,6 +115,7 @@ def backtest_star_xgb(
         class_means_arr,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
     )
 
     trades = _build_signal_records(
@@ -128,6 +129,7 @@ def backtest_star_xgb(
         predicted_probs=probs,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
     )
 
     if core_start_ts is not None and not trades.empty:
@@ -231,6 +233,7 @@ def _build_signal_records(
     predicted_probs: Optional[np.ndarray] = None,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = None,
+    min_hold_bars: int = 0,
 ) -> pd.DataFrame:
     """從模型預測中建立交易記錄。"""
     if dataset.empty:
@@ -255,6 +258,7 @@ def _build_signal_records(
         model_params,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=min_hold_bars,
     )
     return trades
 

@@ -24,6 +24,7 @@ class StarRuntimeState:
     position_side: Optional[str] = None
     entry_price: Optional[float] = None
     entry_timestamp: Optional[pd.Timestamp] = None
+    min_exit_timestamp: Optional[pd.Timestamp] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -34,6 +35,9 @@ class StarRuntimeState:
             "entry_price": self.entry_price,
             "entry_timestamp": self.entry_timestamp.isoformat()
             if self.entry_timestamp
+            else None,
+            "min_exit_timestamp": self.min_exit_timestamp.isoformat()
+            if self.min_exit_timestamp
             else None,
         }
 
@@ -57,11 +61,18 @@ class StarRuntimeState:
                 entry_price = float(entry_price)
             except ValueError:
                 entry_price = None
+        min_exit_raw = data.get("min_exit_timestamp")
+        min_exit_timestamp = (
+            pd.to_datetime(min_exit_raw, utc=True, errors="coerce")
+            if min_exit_raw
+            else None
+        )
         return cls(
             last_signal_timestamp=timestamp,
             position_side=data.get("position_side"),
             entry_price=entry_price,
             entry_timestamp=entry_timestamp,
+            min_exit_timestamp=min_exit_timestamp,
         )
 
 
@@ -75,6 +86,8 @@ def generate_realtime_signal(
     feature_stats: Optional[Dict[str, Dict[str, float]]] = None,
     cache: Optional[StarFeatureCache] = None,
     state: Optional[StarRuntimeState] = None,
+    min_hold_duration: Optional[pd.Timedelta] = None,
+    stop_loss_pct: Optional[float] = None,
 ) -> Tuple[str, Dict[str, object], StarRuntimeState]:
     """根據最新 K 線資料產出 star_xgb 策略的即時訊號。"""
     if df.empty:
@@ -120,39 +133,80 @@ def generate_realtime_signal(
 
     if runtime_state.position_side:
         exit_signal = False
-        if runtime_state.position_side == "LONG":
-            exit_signal = pred_class in {0, -1, -2}
-        elif runtime_state.position_side == "SHORT":
-            exit_signal = pred_class in {0, 1, 2}
-
-        if exit_signal and timestamp is not None and not np.isnan(price):
-            if runtime_state.entry_price:
-                if runtime_state.position_side == "LONG":
-                    trade_return = (
-                        price - runtime_state.entry_price
-                    ) / runtime_state.entry_price
-                else:
-                    trade_return = (
-                        runtime_state.entry_price - price
-                    ) / runtime_state.entry_price
+        stop_triggered = False
+        trade_return = None
+        hold_elapsed = True
+        min_exit_ts = runtime_state.min_exit_timestamp
+        if (
+            min_hold_duration
+            and timestamp is not None
+            and runtime_state.entry_timestamp is not None
+        ):
+            if min_exit_ts is None:
+                min_exit_ts = runtime_state.entry_timestamp + min_hold_duration
+            hold_elapsed = timestamp >= min_exit_ts
+        if runtime_state.entry_price and not np.isnan(price):
+            if runtime_state.position_side == "LONG":
+                trade_return = (
+                    price - runtime_state.entry_price
+                ) / runtime_state.entry_price
+                if stop_loss_pct and trade_return <= -abs(stop_loss_pct):
+                    stop_triggered = True
             else:
-                trade_return = None
+                trade_return = (
+                    runtime_state.entry_price - price
+                ) / runtime_state.entry_price
+                if stop_loss_pct and trade_return <= -abs(stop_loss_pct):
+                    stop_triggered = True
+        if hold_elapsed:
+            if runtime_state.position_side == "LONG":
+                exit_signal = pred_class in {0, -1, -2}
+            elif runtime_state.position_side == "SHORT":
+                exit_signal = pred_class in {0, 1, 2}
+
+        if (exit_signal or stop_triggered) and timestamp is not None and not np.isnan(
+            price
+        ):
             context.update(
                 {
                     "action": f"exit_{runtime_state.position_side.lower()}",
                     "threshold": threshold,
                     "return": trade_return,
+                    "hold_elapsed": hold_elapsed,
+                    "stop_loss_triggered": stop_triggered,
+                    "min_exit_timestamp": (
+                        min_exit_ts.isoformat() if min_exit_ts is not None else None
+                    ),
                 }
             )
             new_state = StarRuntimeState(last_signal_timestamp=timestamp)
-            context = round_numeric_fields(context, decimals_map={"expected_return": 4})
+            context = round_numeric_fields(
+                context, decimals_map={"expected_return": 4, "return": 4}
+            )
             return f"EXIT_{runtime_state.position_side}", context, new_state
+
+        if not hold_elapsed:
+            context.update(
+                {
+                    "reason": "min_hold_active",
+                    "threshold": threshold,
+                    "hold_elapsed": False,
+                    "min_exit_timestamp": (
+                        min_exit_ts.isoformat() if min_exit_ts is not None else None
+                    ),
+                }
+            )
+            context = round_numeric_fields(context, decimals_map={"expected_return": 4})
+            return "HOLD", context, runtime_state
 
     if (
         runtime_state.position_side is None
         and expected_return >= threshold
         and not np.isnan(price)
     ):
+        min_exit_timestamp = None
+        if min_hold_duration and timestamp is not None:
+            min_exit_timestamp = timestamp + min_hold_duration
         if pred_class == 2:
             context.update({"action": "enter_long", "threshold": threshold})
             new_state = StarRuntimeState(
@@ -160,6 +214,7 @@ def generate_realtime_signal(
                 position_side="LONG",
                 entry_price=price,
                 entry_timestamp=timestamp,
+                min_exit_timestamp=min_exit_timestamp,
             )
             context = round_numeric_fields(context, decimals_map={"expected_return": 4})
             return "ENTER_LONG", context, new_state
@@ -170,6 +225,7 @@ def generate_realtime_signal(
                 position_side="SHORT",
                 entry_price=price,
                 entry_timestamp=timestamp,
+                min_exit_timestamp=min_exit_timestamp,
             )
             context = round_numeric_fields(context, decimals_map={"expected_return": 4})
             return "ENTER_SHORT", context, new_state

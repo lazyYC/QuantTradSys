@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -164,12 +165,46 @@ class StarRealtimeEngine:
         self.feature_stats = feature_stats
         self.model = load_star_model(model_path)
 
+        self.timeframe_offset = timeframe_to_offset(self.timeframe)
+        self.min_hold_bars = max(int(self.indicator.future_window), 0)
+        self.min_hold_duration = (
+            self.timeframe_offset * self.min_hold_bars
+            if self.min_hold_bars > 0
+            else None
+        )
+        self.stop_loss_pct = self._resolve_stop_loss_pct(
+            payload.get("stop_loss_pct")
+        )
+
         runtime_record = load_runtime_state(
             self.state_store_path, strategy, symbol, timeframe
         )
         self.runtime_state = StarRuntimeState.from_dict(
             runtime_record.state if runtime_record else None
         )
+        if (
+            self.runtime_state.position_side
+            and self.runtime_state.entry_timestamp is not None
+            and self.min_hold_duration is not None
+            and self.runtime_state.min_exit_timestamp is None
+        ):
+            self.runtime_state.min_exit_timestamp = (
+                self.runtime_state.entry_timestamp + self.min_hold_duration
+            )
+
+        if self.min_hold_duration is not None:
+            LOGGER.info(
+                "Runtime min hold configured | bars=%s duration=%s",
+                self.min_hold_bars,
+                self.min_hold_duration,
+            )
+        else:
+            LOGGER.info("Runtime min hold disabled (future_window=%s)", self.min_hold_bars)
+
+        if self.stop_loss_pct is not None:
+            LOGGER.info("Runtime stop loss pct=%.4f", self.stop_loss_pct)
+        else:
+            LOGGER.info("Runtime stop loss disabled")
 
         LOGGER.info("初始化 OHLCV 資料 (REST)")
         raw_df = fetch_yearly_ohlcv(
@@ -283,6 +318,8 @@ class StarRealtimeEngine:
             feature_stats=self.feature_stats,
             cache=cache,
             state=self.runtime_state,
+            min_hold_duration=self.min_hold_duration,
+            stop_loss_pct=self.stop_loss_pct,
         )
         context.update(
             {
@@ -314,6 +351,36 @@ class StarRealtimeEngine:
                 state=new_state.to_dict(),
             )
             self.runtime_state = new_state
+
+    # ------------------------------------------------------------------ #
+    # Internal utilities
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _resolve_stop_loss_pct(stored_value: Optional[float]) -> Optional[float]:
+        env_keys = ["STAR_STOP_LOSS_PCT", "STOP_LOSS_PCT"]
+        for key in env_keys:
+            raw = os.getenv(key)
+            if raw is None:
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                LOGGER.warning("Invalid %s value %s; ignoring", key, raw)
+                continue
+            if value <= 0:
+                return None
+            return value
+
+        if stored_value is not None:
+            try:
+                value = float(stored_value)
+            except (TypeError, ValueError):
+                LOGGER.debug("Stored stop_loss_pct %s invalid; ignoring", stored_value)
+            else:
+                return value if value > 0 else None
+
+        return 0.01
 
 
 if __name__ == "__main__":

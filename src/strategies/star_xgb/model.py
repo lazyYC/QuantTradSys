@@ -98,6 +98,7 @@ def train_star_model(
             class_means,
             transaction_cost=transaction_cost,
             stop_loss_pct=stop_loss_pct,
+            min_hold_bars=indicator_params.future_window,
         )
         score = _score_metric(metrics)
         record = {
@@ -140,6 +141,7 @@ def train_star_model(
             best_model_params,
             transaction_cost=transaction_cost,
             stop_loss_pct=stop_loss_pct,
+            min_hold_bars=indicator_params.future_window,
         )
         class_means = _calibrate_class_means(class_means, train_trades)
     train_metrics = _evaluate(
@@ -149,6 +151,7 @@ def train_star_model(
         class_means,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
     )
     valid_probs = (
         final_model.predict_proba(valid_df[feature_cols])
@@ -162,6 +165,7 @@ def train_star_model(
         class_means,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
     )
 
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -227,6 +231,7 @@ def _simulate_trades(
     *,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = None,
+    min_hold_bars: int = 0,
 ) -> pd.DataFrame:
     """依據預測類別與預期報酬模擬交易，回傳完整交易表。"""
     trade_columns = [
@@ -260,8 +265,9 @@ def _simulate_trades(
     threshold = float(params.decision_threshold)
     open_trade: Optional[Dict[str, object]] = None
     records: List[Dict[str, object]] = []
+    min_hold = max(int(min_hold_bars), 0)
 
-    for row in frame.itertuples(index=False):
+    for idx, row in enumerate(frame.itertuples(index=False), start=0):
         ts: pd.Timestamp = row.timestamp
         close_price = float(row.close)
         predicted_class = float(row.predicted_class_sim)
@@ -280,10 +286,12 @@ def _simulate_trades(
                 if unrealized <= -stop_loss_pct:
                     stop_triggered = True
 
-            if side == "LONG":
-                exit_signal = predicted_class in {0.0, -1.0, -2.0}
-            elif side == "SHORT":
-                exit_signal = predicted_class in {0.0, 1.0, 2.0}
+            can_exit_by_signal = idx >= open_trade["min_exit_idx"]
+            if can_exit_by_signal:
+                if side == "LONG":
+                    exit_signal = predicted_class in {0.0, -1.0, -2.0}
+                elif side == "SHORT":
+                    exit_signal = predicted_class in {0.0, 1.0, 2.0}
 
             if stop_triggered or exit_signal:
                 entry_price = open_trade["entry_price"]
@@ -325,6 +333,8 @@ def _simulate_trades(
                     "entry_time": ts,
                     "entry_price": close_price,
                     "entry_expected_return": expected_ret,
+                    "entry_idx": idx,
+                    "min_exit_idx": idx + min_hold,
                     "entry_class": predicted_class,
                 }
             elif predicted_class == -2.0:
@@ -333,6 +343,8 @@ def _simulate_trades(
                     "entry_time": ts,
                     "entry_price": close_price,
                     "entry_expected_return": expected_ret,
+                    "entry_idx": idx,
+                    "min_exit_idx": idx + min_hold,
                     "entry_class": predicted_class,
                 }
 
@@ -519,6 +531,7 @@ def _evaluate(
     *,
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = None,
+    min_hold_bars: int = 0,
 ) -> Dict[str, float]:
     if df.empty:
         metrics = {
@@ -546,6 +559,7 @@ def _evaluate(
         params,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        min_hold_bars=min_hold_bars,
     )
     summary = _summarize_trades(trades)
 
