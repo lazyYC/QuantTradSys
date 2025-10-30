@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from notifier.dispatcher import (  # noqa: E402
+    AlpacaBrokerAdapter,
     execute_trading,
     get_alpaca_client,
     get_latest_price,
@@ -50,7 +51,8 @@ def main() -> None:
         print("[DRY RUN] Order not submitted.")
         return
 
-    success = execute_trading(client, args.action, context)
+    broker = AlpacaBrokerAdapter(client)
+    success = execute_trading(broker, args.action, context)
     if success:
         print("Order submitted.")
     else:

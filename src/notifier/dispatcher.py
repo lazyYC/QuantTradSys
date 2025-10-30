@@ -1,19 +1,110 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 import ccxt
 import requests
 
-from brokers import AlpacaAPIError, AlpacaCredentials, AlpacaPaperTradingClient
+from brokers import (
+    AlpacaAPIError,
+    AlpacaCredentials,
+    AlpacaPaperTradingClient,
+    BinanceAPIError,
+    BinanceCredentials,
+    BinanceUSDMClient,
+)
 from config.env import DEFAULT_ENV_PATH, load_env
 from utils.symbols import canonicalize_symbol, to_alpaca_symbol, to_exchange_symbol
 
 LOGGER = logging.getLogger(__name__)
 
 _ALPACA_CLIENT: Optional[AlpacaPaperTradingClient] = None
-_BINANCE_CLIENT: Optional[ccxt.Exchange] = None
+_BINANCE_PRICE_CLIENT: Optional[ccxt.Exchange] = None
+_BINANCE_TRADE_CLIENT: Optional[BinanceUSDMClient] = None
+
+
+class TradingBrokerAdapter(Protocol):
+    """Minimal interface for brokers used by the dispatcher."""
+
+    name: str
+
+    def format_order_symbol(self, canonical_symbol: str) -> str:
+        ...
+
+    def submit_market_order(
+        self, *, symbol: str, side: str, notional: float
+    ) -> Dict[str, Any]:
+        ...
+
+    def close_position(self, symbol: str, side: Optional[str]) -> Dict[str, Any]:
+        ...
+
+    def account_overview(self) -> Dict[str, Any]:
+        ...
+
+
+class AlpacaBrokerAdapter:
+    """Adapter exposing Alpaca client through the generic broker interface."""
+
+    name = "alpaca"
+
+    def __init__(self, client: AlpacaPaperTradingClient) -> None:
+        self._client = client
+
+    def format_order_symbol(self, canonical_symbol: str) -> str:
+        return format_alpaca_symbol(canonical_symbol)
+
+    def submit_market_order(
+        self, *, symbol: str, side: str, notional: float
+    ) -> Dict[str, Any]:
+        return self._client.submit_order(
+            symbol=symbol,
+            side=side,
+            notional=notional,
+            order_type="market",
+            time_in_force="gtc",
+        )
+
+    def close_position(self, symbol: str, side: Optional[str]) -> Dict[str, Any]:
+        return self._client.close_position(symbol, side=side)
+
+    def account_overview(self) -> Dict[str, Any]:
+        return self._client.account_overview()
+
+
+class BinanceBrokerAdapter:
+    """Adapter exposing Binance USD-M client through the generic broker interface."""
+
+    name = "binance"
+
+    def __init__(self, client: BinanceUSDMClient) -> None:
+        self._client = client
+
+    def format_order_symbol(self, canonical_symbol: str) -> str:
+        exchange_id = os.getenv("BINANCE_ORDER_EXCHANGE", "binance").lower()
+        normalized_exchange = "binance" if exchange_id == "binanceusdm" else exchange_id
+        symbol = to_exchange_symbol(canonical_symbol, normalized_exchange)
+        if exchange_id == "binanceusdm" and symbol.endswith("/USD"):
+            symbol = symbol[:-4] + "/USDT"
+        return symbol
+
+    def submit_market_order(
+        self, *, symbol: str, side: str, notional: float
+    ) -> Dict[str, Any]:
+        return self._client.submit_order(
+            symbol=symbol,
+            side=side,
+            notional=notional,
+            order_type="market",
+            time_in_force="GTC",
+        )
+
+    def close_position(self, symbol: str, side: Optional[str]) -> Dict[str, Any]:
+        return self._client.close_position(symbol, side=side)
+
+    def account_overview(self) -> Dict[str, Any]:
+        return self._client.account_overview()
 
 
 def dispatch_signal(
@@ -34,37 +125,37 @@ def dispatch_signal(
     else:
         LOGGER.debug("DISCORD_WEBHOOK not configured, skipping Discord notification")
 
-    client = get_alpaca_client(env_path=env_path)
-    if client is None:
-        LOGGER.debug("Alpaca client unavailable; trading step skipped")
+    broker = get_trading_broker(env_path=env_path)
+    if broker is None:
+        LOGGER.debug("Trading broker unavailable; trading step skipped")
         return False
-    return execute_trading(client, action, context)
+    return execute_trading(broker, action, context)
 
 
 def execute_trading(
-    client: AlpacaPaperTradingClient, action: str, context: Dict[str, Any]
+    broker: TradingBrokerAdapter, action: str, context: Dict[str, Any]
 ) -> bool:
     symbol = _normalize_symbol(str(context.get("symbol", "")))
     action_upper = action.upper()
+    broker_label = broker.name.upper()
     success = False
     try:
-        order_symbol = format_alpaca_symbol(symbol)
+        order_symbol = broker.format_order_symbol(symbol)
         if action_upper == "ENTER_LONG":
-            notional = _resolve_order_notional(client)
-            if notional <= 0:
-                LOGGER.warning("Alpaca trading skipped: no buying power available")
-                return False
-            if not _is_price_within_tolerance(context, symbol):
-                return False
-            client.submit_order(
-                symbol=order_symbol,
-                side="buy",
-                notional=notional,
-                order_type="market",
-                time_in_force="gtc",
+            notional = _resolve_order_notional(
+                broker,
+                ratio=_load_order_ratio(broker.name),
+                max_notional=_load_max_notional(broker.name),
             )
+            if notional <= 0:
+                LOGGER.warning("%s trading skipped: no buying power available", broker_label)
+                return False
+            if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
+                return False
+            broker.submit_market_order(symbol=order_symbol, side="buy", notional=notional)
             LOGGER.info(
-                "Submitted Alpaca LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
+                "Submitted %s LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
+                broker_label,
                 symbol,
                 order_symbol,
                 notional,
@@ -72,34 +163,35 @@ def execute_trading(
             success = True
         elif action_upper == "EXIT_LONG":
             try:
-                client.close_position(order_symbol, side="sell")
+                broker.close_position(order_symbol, side="sell")
             except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close LONG position for %s: %s", symbol, exc)
+                LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
+                return False
+            except BinanceAPIError as exc:
+                LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
                 return False
             LOGGER.info(
-                "Closed Alpaca LONG position | feed_symbol=%s order_symbol=%s",
+                "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
+                broker_label,
                 symbol,
                 order_symbol,
             )
             success = True
         elif action_upper == "ENTER_SHORT":
-            notional = _resolve_order_notional(client)
-            if notional <= 0:
-                LOGGER.warning(
-                    "Alpaca trading skipped: no buying power available for short"
-                )
-                return False
-            if not _is_price_within_tolerance(context, symbol):
-                return False
-            client.submit_order(
-                symbol=order_symbol,
-                side="sell",
-                notional=notional,
-                order_type="market",
-                time_in_force="gtc",
+            notional = _resolve_order_notional(
+                broker,
+                ratio=_load_order_ratio(broker.name),
+                max_notional=_load_max_notional(broker.name),
             )
+            if notional <= 0:
+                LOGGER.warning("%s trading skipped: no buying power available for short", broker_label)
+                return False
+            if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
+                return False
+            broker.submit_market_order(symbol=order_symbol, side="sell", notional=notional)
             LOGGER.info(
-                "Submitted Alpaca SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
+                "Submitted %s SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
+                broker_label,
                 symbol,
                 order_symbol,
                 notional,
@@ -107,12 +199,16 @@ def execute_trading(
             success = True
         elif action_upper == "EXIT_SHORT":
             try:
-                client.close_position(order_symbol, side="buy")
+                broker.close_position(order_symbol, side="buy")
             except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close SHORT position for %s: %s", symbol, exc)
+                LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
+                return False
+            except BinanceAPIError as exc:
+                LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
                 return False
             LOGGER.info(
-                "Closed Alpaca SHORT position | feed_symbol=%s order_symbol=%s",
+                "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
+                broker_label,
                 symbol,
                 order_symbol,
             )
@@ -120,11 +216,13 @@ def execute_trading(
         else:
             LOGGER.debug("Unknown trading action %s; skipping", action)
             return False
-    except AlpacaAPIError as exc:
-        LOGGER.error("Alpaca API error while handling %s: %s", action_upper, exc)
+    except (AlpacaAPIError, BinanceAPIError) as exc:
+        LOGGER.error("%s API error while handling %s: %s", broker_label, action_upper, exc)
         return False
     except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Unexpected error while handling %s: %s", action_upper, exc)
+        LOGGER.error(
+            "Unexpected error while handling %s for %s: %s", action_upper, broker_label, exc
+        )
         return False
     return success
 
@@ -146,7 +244,26 @@ def get_latest_price(
     return price
 
 
-def _is_price_within_tolerance(context: Dict[str, Any], symbol: str) -> bool:
+def get_trading_broker(
+    *, env_path: Optional[Path] = None
+) -> Optional[TradingBrokerAdapter]:
+    """Return a broker adapter based on TRADING_BROKER setting."""
+    if env_path is not None:
+        load_env(env_path)
+    provider = (os.getenv("TRADING_BROKER") or "alpaca").strip().lower()
+    if provider in {"alpaca", ""}:
+        client = get_alpaca_client(env_path=env_path)
+        return AlpacaBrokerAdapter(client) if client else None
+    if provider in {"binance", "binanceusdm"}:
+        client = _get_binance_trading_client()
+        return BinanceBrokerAdapter(client) if client else None
+    LOGGER.error("Unsupported TRADING_BROKER value: %s", provider)
+    return None
+
+
+def _is_price_within_tolerance(
+    context: Dict[str, Any], symbol: str, *, broker_name: str
+) -> bool:
     signal_price = context.get("price") or context.get("close")
     try:
         signal_price_val = float(signal_price)
@@ -154,16 +271,16 @@ def _is_price_within_tolerance(context: Dict[str, Any], symbol: str) -> bool:
         LOGGER.debug("Signal price missing or invalid; skipping price validation")
         return True
 
-    tolerance_raw = os.getenv("ALPACA_PRICE_TOLERANCE", "0.0003")
-    try:
-        tolerance = max(float(tolerance_raw), 0.0)
-    except ValueError:
-        tolerance = 0.005
+    tolerance = _load_price_tolerance(broker_name)
 
     normalized_symbol = _normalize_ccxt_symbol(symbol)
     current_price, ticker_meta = _fetch_ccxt_price(normalized_symbol)
     if current_price is None:
-        LOGGER.warning("Unable to verify current price for %s; trade skipped", symbol)
+        LOGGER.warning(
+            "Unable to verify current price for %s; %s trade skipped",
+            symbol,
+            broker_name.upper(),
+        )
         return False
 
     deviation = abs(current_price - signal_price_val) / signal_price_val
@@ -183,20 +300,22 @@ def _is_price_within_tolerance(context: Dict[str, Any], symbol: str) -> bool:
     deviation, latest_price, details = confirmed
     if deviation > tolerance:
         LOGGER.warning(
-            "Price deviation %.4f exceeds tolerance %.4f (signal=%.4f, latest=%.4f, details=%s); trade skipped",
+            "Price deviation %.4f exceeds tolerance %.4f (signal=%.4f, latest=%.4f, details=%s); %s trade skipped",
             deviation,
             tolerance,
             signal_price_val,
             latest_price,
             details,
+            broker_name.upper(),
         )
         return False
 
     LOGGER.info(
-        "Price deviation normalized after recheck (deviation=%.4f <= tolerance %.4f, details=%s)",
+        "Price deviation normalized after recheck (deviation=%.4f <= tolerance %.4f, details=%s) for %s",
         deviation,
         tolerance,
         details,
+        broker_name.upper(),
     )
     return True
 
@@ -229,57 +348,156 @@ def format_alpaca_symbol(symbol: str) -> str:
     return formatted if strip_slash else canonical_target
 
 
-def _resolve_order_notional(client: AlpacaPaperTradingClient) -> float:
+def _resolve_order_notional(
+    broker: TradingBrokerAdapter, *, ratio: float, max_notional: Optional[float]
+) -> float:
     try:
-        account = client.account_overview()
-    except AlpacaAPIError as exc:
-        LOGGER.error("Unable to fetch Alpaca account overview: %s", exc)
+        account = broker.account_overview()
+    except (AlpacaAPIError, BinanceAPIError) as exc:
+        LOGGER.error("Unable to fetch %s account overview: %s", broker.name.upper(), exc)
         return 0.0
     except Exception as exc:  # noqa: BLE001
-        LOGGER.error("Unexpected error fetching Alpaca account overview: %s", exc)
+        LOGGER.error(
+            "Unexpected error fetching %s account overview: %s", broker.name.upper(), exc
+        )
         return 0.0
 
-    ratio_raw = os.getenv("ALPACA_ORDER_RATIO", "0.97")
-    try:
-        order_ratio = max(min(float(ratio_raw), 1.0), 0.0)
-    except ValueError:
-        order_ratio = 0.97
-    if order_ratio <= 0.0:
-        LOGGER.warning("ALPACA_ORDER_RATIO is non-positive; trading skipped")
+    if ratio <= 0.0:
+        LOGGER.warning("%s order ratio is non-positive; trading skipped", broker.name.upper())
         return 0.0
 
-    cash_raw = account.get("cash")
-    if cash_raw is None:
-        LOGGER.warning("Alpaca account overview missing 'cash'; trading skipped")
-        return 0.0
-    try:
-        cash_balance = float(cash_raw)
-    except (TypeError, ValueError):
-        LOGGER.error("Unable to parse Alpaca cash balance: %s", cash_raw)
-        return 0.0
-    if cash_balance <= 0.0:
-        LOGGER.info("Alpaca account has no cash available for trading")
+    if broker.name == "alpaca":
+        notional = _resolve_alpaca_notional(account, ratio)
+    elif broker.name == "binance":
+        notional = _resolve_binance_notional(account, ratio)
+    else:
+        LOGGER.error("Unsupported broker %s for notional resolution", broker.name)
         return 0.0
 
-    notional = cash_balance * order_ratio
-
-    max_notional_raw = os.getenv("ALPACA_MAX_ORDER_NOTIONAL", "200000")
-    try:
-        max_notional = float(max_notional_raw)
-    except ValueError:
-        max_notional = 200000.0
-    if max_notional <= 0:
-        max_notional = None
+    if notional <= 0.0:
+        return 0.0
 
     if max_notional is not None and notional > max_notional:
         LOGGER.debug(
-            "Clamping order notional from %.2f to %.2f based on ALPACA_MAX_ORDER_NOTIONAL",
+            "Clamping order notional from %.2f to %.2f based on %s max notional",
             notional,
             max_notional,
+            broker.name.upper(),
         )
         notional = max_notional
-
     return notional
+
+
+def _resolve_alpaca_notional(account: Dict[str, Any], ratio: float) -> float:
+    for key in ("buying_power", "cash"):
+        value = account.get(key)
+        if value is None:
+            continue
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            LOGGER.debug("Unable to parse Alpaca %s balance: %s", key, value)
+            continue
+        if amount > 0:
+            return amount * ratio
+    LOGGER.info("Alpaca account has no cash or buying power available for trading")
+    return 0.0
+
+
+def _resolve_binance_notional(account: Dict[str, Any], ratio: float) -> float:
+    candidates = []
+    account_info = account.get("info") or {}
+    for info_key in ("availableBalance", "totalWalletBalance", "cashBalance"):
+        value = account_info.get(info_key)
+        if value is not None:
+            candidates.append(value)
+
+    usdt_entry = account.get("USDT") or {}
+    for bal_key in ("free", "total"):
+        value = usdt_entry.get(bal_key)
+        if value is not None:
+            candidates.append(value)
+
+    for container_key in ("free", "total"):
+        container = account.get(container_key) or {}
+        value = container.get("USDT")
+        if value is not None:
+            candidates.append(value)
+
+    for raw in candidates:
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError):
+            LOGGER.debug("Unable to parse Binance balance value: %s", raw)
+            continue
+        if amount > 0:
+            return amount * ratio
+
+    LOGGER.info("Binance account has no USDT available for trading")
+    return 0.0
+
+
+def _load_order_ratio(broker_name: str) -> float:
+    default_ratio = 0.97
+    env_keys = [
+        f"{broker_name.upper()}_ORDER_RATIO",
+        "ORDER_RATIO",
+    ]
+    if broker_name != "alpaca":
+        env_keys.append("ALPACA_ORDER_RATIO")  # backward compatibility
+    for key in env_keys:
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        try:
+            value = max(min(float(raw), 1.0), 0.0)
+            return value
+        except ValueError:
+            LOGGER.debug("Unable to parse %s=%s; falling back", key, raw)
+    return default_ratio
+
+
+def _load_max_notional(broker_name: str) -> Optional[float]:
+    env_keys = [
+        f"{broker_name.upper()}_MAX_ORDER_NOTIONAL",
+        "MAX_ORDER_NOTIONAL",
+    ]
+    if broker_name != "alpaca":
+        env_keys.append("ALPACA_MAX_ORDER_NOTIONAL")  # backward compatibility
+    for key in env_keys:
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            LOGGER.debug("Unable to parse %s=%s; falling back", key, raw)
+            continue
+        if value <= 0:
+            return None
+        return value
+    if broker_name == "alpaca":
+        return 200000.0
+    return None
+
+
+def _load_price_tolerance(broker_name: str) -> float:
+    default_tolerance = 0.0003
+    env_keys = [
+        f"{broker_name.upper()}_PRICE_TOLERANCE",
+        "PRICE_TOLERANCE",
+        "ALPACA_PRICE_TOLERANCE",  # backward compatibility
+    ]
+    for key in env_keys:
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        try:
+            value = max(float(raw), 0.0)
+            return value
+        except ValueError:
+            LOGGER.debug("Unable to parse %s=%s; falling back", key, raw)
+    return default_tolerance
 
 
 def _fetch_ccxt_price(symbol: str) -> Tuple[Optional[float], Dict[str, Any]]:
@@ -357,6 +575,38 @@ def _confirm_price_deviation(
     return deviation, price, details
 
 
+def _get_binance_trading_client() -> Optional[BinanceUSDMClient]:
+    global _BINANCE_TRADE_CLIENT
+    if _BINANCE_TRADE_CLIENT is not None:
+        return _BINANCE_TRADE_CLIENT
+
+    api_key = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_API_KEY_ID")
+    api_secret = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_PRIVATE_KEY")
+    if not (api_key and api_secret):
+        LOGGER.debug("Binance credentials not configured; trading step skipped")
+        return None
+
+    sandbox = _get_bool_env("BINANCE_SANDBOX", True)
+    recv_window = _get_int_env("BINANCE_RECV_WINDOW", default=5000) or 5000
+    default_symbol = os.getenv("BINANCE_DEFAULT_SYMBOL")
+
+    try:
+        client = BinanceUSDMClient(
+            BinanceCredentials(api_key=api_key, api_secret=api_secret),
+            sandbox=sandbox,
+            recv_window=recv_window,
+            default_symbol=default_symbol,
+        )
+    except BinanceAPIError as exc:
+        LOGGER.error("Failed to initialise Binance client: %s", exc)
+        return None
+
+    _configure_binance_symbol(client)
+    _BINANCE_TRADE_CLIENT = client
+    LOGGER.info("Binance USD-M client initialized (sandbox=%s)", sandbox)
+    return _BINANCE_TRADE_CLIENT
+
+
 def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
     global _ALPACA_CLIENT
     if _ALPACA_CLIENT is not None:
@@ -378,10 +628,54 @@ def _get_alpaca_client() -> Optional[AlpacaPaperTradingClient]:
 
 
 def _get_binance_client() -> ccxt.Exchange:
-    global _BINANCE_CLIENT
-    if _BINANCE_CLIENT is None:
-        _BINANCE_CLIENT = ccxt.binance({"enableRateLimit": True})
-    return _BINANCE_CLIENT
+    global _BINANCE_PRICE_CLIENT
+    if _BINANCE_PRICE_CLIENT is None:
+        _BINANCE_PRICE_CLIENT = ccxt.binance({"enableRateLimit": True})
+    return _BINANCE_PRICE_CLIENT
+
+
+def _configure_binance_symbol(client: BinanceUSDMClient) -> None:
+    symbol = os.getenv("BINANCE_SYMBOL") or os.getenv("BINANCE_DEFAULT_SYMBOL")
+    if not symbol:
+        return
+
+    leverage = _get_int_env("BINANCE_LEVERAGE")
+    margin_mode = os.getenv("BINANCE_MARGIN_MODE")
+    hedged = _get_optional_bool_env("BINANCE_HEDGED_MODE")
+    try:
+        client.configure_symbol(
+            symbol,
+            leverage=leverage,
+            margin_mode=margin_mode,
+            hedged=hedged,
+        )
+    except BinanceAPIError as exc:
+        LOGGER.warning("Failed to configure Binance symbol %s: %s", symbol, exc)
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_optional_bool_env(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_int_env(name: str, *, default: Optional[int] = None) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        LOGGER.debug("Unable to parse %s=%s; falling back", name, raw)
+        return default
 
 
 def _normalize_ccxt_symbol(symbol: str) -> str:
@@ -390,9 +684,13 @@ def _normalize_ccxt_symbol(symbol: str) -> str:
 
 
 __all__ = [
+    "AlpacaBrokerAdapter",
+    "BinanceBrokerAdapter",
     "dispatch_signal",
     "execute_trading",
     "get_alpaca_client",
     "get_latest_price",
+    "get_trading_broker",
     "format_alpaca_symbol",
+    "TradingBrokerAdapter",
 ]

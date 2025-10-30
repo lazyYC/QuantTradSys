@@ -77,6 +77,8 @@ class AlpacaPaperTradingClient:
         if qty is not None:
             payload["qty"] = str(qty)
         if notional is not None:
+            # limit decimal places to 2 based on the broker's precision
+            notional = round(notional, 2)
             payload["notional"] = str(notional)
         if client_order_id:
             payload["client_order_id"] = client_order_id
