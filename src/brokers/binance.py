@@ -92,11 +92,18 @@ class BinanceUSDMClient:
         )
 
     def get_position(self, symbol: str) -> Optional[Dict[str, Any]]:
-        positions = self._call_with_time_sync(
-            self._exchange.fetch_positions, symbols=[symbol]
-        )
+        positions = self._call_with_time_sync(self._exchange.fetch_positions)
+        target = self._normalize_position_symbol(symbol)
         for position in positions:
-            if position.get("symbol") == symbol:
+            pos_symbol = (
+                position.get("symbol")
+                or position.get("info", {}).get("symbol")
+                or position.get("id")
+            )
+            if not pos_symbol:
+                continue
+            normalized = self._normalize_position_symbol(str(pos_symbol))
+            if normalized == target:
                 return position
         return None
 
@@ -109,14 +116,14 @@ class BinanceUSDMClient:
     ) -> Dict[str, Any]:
         position = self.get_position(symbol)
         if not position:
-            return {}
+            raise BinanceAPIError(f"No open position found for {symbol}")
 
         raw_amt = position.get("info", {}).get("positionAmt")
         if raw_amt is None:
-            return {}
+            raise BinanceAPIError(f"Position amount missing for {symbol}")
         amount = abs(float(raw_amt))
         if amount == 0:
-            return {}
+            raise BinanceAPIError(f"Position size already zero for {symbol}")
 
         inferred_side = "sell" if float(raw_amt) > 0 else "buy"
         order_side = side.lower() if side else inferred_side
@@ -146,10 +153,11 @@ class BinanceUSDMClient:
         if qty is None and notional is None:
             raise ValueError("Either qty or notional must be provided")
 
-        order_params: Dict[str, Any] = {
-            "recvWindow": self._recv_window,
-            "timeInForce": time_in_force.upper(),
-        }
+        order_type_lower = order_type.lower()
+
+        order_params: Dict[str, Any] = {"recvWindow": self._recv_window}
+        if time_in_force and "limit" in order_type_lower:
+            order_params["timeInForce"] = time_in_force.upper()
         if reduce_only:
             order_params["reduceOnly"] = True
         if params:
@@ -169,7 +177,6 @@ class BinanceUSDMClient:
             raise BinanceAPIError("Order amount resolves to zero")
 
         order_price = price
-        order_type_lower = order_type.lower()
         if order_type_lower == "limit":
             if order_price is None:
                 raise ValueError("Limit orders require price")
@@ -287,6 +294,13 @@ class BinanceUSDMClient:
         if not self._default_symbol:
             raise ValueError("Symbol must be provided for this operation")
         return self._default_symbol
+
+    @staticmethod
+    def _normalize_position_symbol(symbol: str) -> str:
+        if not symbol:
+            return ""
+        core = symbol.split(":")[0]
+        return core.replace("/", "").upper()
 
 
 __all__ = [
