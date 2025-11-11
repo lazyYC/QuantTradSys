@@ -52,7 +52,8 @@ def main() -> None:
         return
 
     broker = AlpacaBrokerAdapter(client)
-    success = execute_trading(broker, args.action, context)
+    success, message = execute_trading(broker, args.action, context)
+    print(message or "No execution message.")
     if success:
         print("Order submitted.")
     else:

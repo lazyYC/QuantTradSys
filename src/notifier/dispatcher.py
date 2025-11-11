@@ -128,17 +128,35 @@ def dispatch_signal(
     broker = get_trading_broker(env_path=env_path)
     if broker is None:
         LOGGER.debug("Trading broker unavailable; trading step skipped")
+        if webhook:
+            _send_discord(
+                webhook,
+                f"{action}_RESULT",
+                {
+                    "message": f"[{action.upper()}] Execution skipped: broker not available",
+                },
+            )
         return False
-    return execute_trading(broker, action, context)
+
+    trade_executed, exec_message = execute_trading(broker, action, context)
+
+    if webhook:
+        status = "SUCCESS" if trade_executed else "FAILED"
+        result_context = {
+            "message": f"[{action.upper()}] Execution {status}: {exec_message or 'no details'}"
+        }
+        _send_discord(webhook, f"{action}_RESULT", result_context)
+    return trade_executed
 
 
 def execute_trading(
     broker: TradingBrokerAdapter, action: str, context: Dict[str, Any]
-) -> bool:
+) -> Tuple[bool, str]:
     symbol = _normalize_symbol(str(context.get("symbol", "")))
     action_upper = action.upper()
     broker_label = broker.name.upper()
     success = False
+    message = ""
     try:
         order_symbol = broker.format_order_symbol(symbol)
         if action_upper == "ENTER_LONG":
@@ -149,9 +167,11 @@ def execute_trading(
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available", broker_label)
-                return False
+                message = "Insufficient buying power"
+                return False, message
             if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
-                return False
+                message = "Price deviation exceeded tolerance"
+                return False, message
             broker.submit_market_order(symbol=order_symbol, side="buy", notional=notional)
             LOGGER.info(
                 "Submitted %s LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
@@ -161,15 +181,21 @@ def execute_trading(
                 notional,
             )
             success = True
+            message = (
+                f"Submitted {broker_label} LONG order | feed_symbol={symbol} "
+                f"order_symbol={order_symbol} notional={notional:.2f}"
+            )
         elif action_upper == "EXIT_LONG":
             try:
                 broker.close_position(order_symbol, side="sell")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
-                return False
+                message = f"Failed to close LONG position: {exc}"
+                return False, message
             except BinanceAPIError as exc:
                 LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
-                return False
+                message = f"Failed to close LONG position: {exc}"
+                return False, message
             LOGGER.info(
                 "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -177,6 +203,10 @@ def execute_trading(
                 order_symbol,
             )
             success = True
+            message = (
+                f"Closed {broker_label} LONG position | feed_symbol={symbol} "
+                f"order_symbol={order_symbol}"
+            )
         elif action_upper == "ENTER_SHORT":
             notional = _resolve_order_notional(
                 broker,
@@ -185,9 +215,11 @@ def execute_trading(
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available for short", broker_label)
-                return False
+                message = "Insufficient buying power for short"
+                return False, message
             if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
-                return False
+                message = "Price deviation exceeded tolerance"
+                return False, message
             broker.submit_market_order(symbol=order_symbol, side="sell", notional=notional)
             LOGGER.info(
                 "Submitted %s SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
@@ -197,15 +229,21 @@ def execute_trading(
                 notional,
             )
             success = True
+            message = (
+                f"Submitted {broker_label} SHORT order | feed_symbol={symbol} "
+                f"order_symbol={order_symbol} notional={notional:.2f}"
+            )
         elif action_upper == "EXIT_SHORT":
             try:
                 broker.close_position(order_symbol, side="buy")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
-                return False
+                message = f"Failed to close SHORT position: {exc}"
+                return False, message
             except BinanceAPIError as exc:
                 LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
-                return False
+                message = f"Failed to close SHORT position: {exc}"
+                return False, message
             LOGGER.info(
                 "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -213,18 +251,25 @@ def execute_trading(
                 order_symbol,
             )
             success = True
+            message = (
+                f"Closed {broker_label} SHORT position | feed_symbol={symbol} "
+                f"order_symbol={order_symbol}"
+            )
         else:
             LOGGER.debug("Unknown trading action %s; skipping", action)
-            return False
+            message = f"Unknown trading action {action_upper}"
+            return False, message
     except (AlpacaAPIError, BinanceAPIError) as exc:
         LOGGER.error("%s API error while handling %s: %s", broker_label, action_upper, exc)
-        return False
+        message = f"{broker_label} API error while handling {action_upper}: {exc}"
+        return False, message
     except Exception as exc:  # noqa: BLE001
         LOGGER.error(
             "Unexpected error while handling %s for %s: %s", action_upper, broker_label, exc
         )
-        return False
-    return success
+        message = f"Unexpected error: {exc}"
+        return False, message
+    return success, message
 
 
 def get_alpaca_client(
@@ -482,7 +527,7 @@ def _load_max_notional(broker_name: str) -> Optional[float]:
 
 
 def _load_price_tolerance(broker_name: str) -> float:
-    default_tolerance = 0.0003
+    default_tolerance = 0.001
     env_keys = [
         f"{broker_name.upper()}_PRICE_TOLERANCE",
         "PRICE_TOLERANCE",

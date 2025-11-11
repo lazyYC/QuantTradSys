@@ -29,14 +29,14 @@ class DispatcherTests(TestCase):
     def test_dispatch_signal_invokes_trading(
         self, mock_execute: mock.MagicMock, mock_post: mock.MagicMock
     ) -> None:
-        mock_execute.return_value = True
+        mock_execute.return_value = (True, "ok")
         result = dispatcher.dispatch_signal(
             "ENTER_LONG",
             {"symbol": "BTC/USD", "price": 30000.0},
             env_path=SRC_DIR / "config" / ".env",
         )
         mock_execute.assert_called_once()
-        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_count, 2)
         self.assertTrue(result)
 
     def test_normalize_symbol_variants(self) -> None:
