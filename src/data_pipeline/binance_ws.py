@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -15,11 +16,11 @@ from utils.symbols import to_exchange_symbol
 
 LOGGER = logging.getLogger(__name__)
 
-_BINANCE_STREAM_URL = "wss://stream.binance.com:9443/ws"
+_BINANCE_STREAM_URL = os.getenv("BINANCE_WS_URL", "wss://fstream.binance.com/ws")
 
 
 def _format_stream_symbol(symbol: str) -> str:
-    """Convert canonical symbols like 'BTC/USD' to Binance stream ids."""
+    """Convert canonical symbols like 'BTC/USDT' to Binance stream ids."""
     mapped = to_exchange_symbol(symbol, "binance")
     return mapped.replace("/", "").lower()
 

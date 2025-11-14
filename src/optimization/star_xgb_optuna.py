@@ -36,6 +36,7 @@ from strategies.star_xgb.labels import build_label_frame
 from strategies.star_xgb.model import StarTrainingResult, train_star_model
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
 from utils.formatting import format_metrics
+from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ def optimize_star_xgb(
     exchange_config: Optional[dict] = None,
     result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
 ) -> StarOptunaResult:
+    symbol = canonicalize_symbol(symbol)
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,

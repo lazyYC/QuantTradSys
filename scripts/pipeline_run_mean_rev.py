@@ -8,6 +8,7 @@ SRC_DIR = ROOT_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from utils.symbols import canonicalize_symbol
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -22,7 +23,7 @@ def main() -> None:
     parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--lookback-days", type=int, default=400)
     parser.add_argument("--timeframe", type=str, default="5m")
-    parser.add_argument("--symbol", type=str, default="BTC/USD")
+    parser.add_argument("--symbol", type=str, default="BTC/USDT")
     parser.add_argument(
         "--params-store-path", type=Path, default=Path("storage/strategy_state.db")
     )
@@ -33,6 +34,7 @@ def main() -> None:
     parser.add_argument("--study-name", type=str, default=None)
     parser.add_argument("--storage", type=str, default=None)
     args = parser.parse_args()
+    args.symbol = canonicalize_symbol(args.symbol)
 
     result = optimize_mean_reversion(
         symbol=args.symbol,

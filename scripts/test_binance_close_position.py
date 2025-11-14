@@ -28,7 +28,7 @@ from notifier.dispatcher import (
     _get_bool_env,
     _get_int_env,
 )
-
+from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger("binance_close_tester")
 
@@ -58,7 +58,11 @@ def main() -> None:
         description="檢查並測試 Binance USD-M close_position 功能"
     )
     parser.add_argument("--env", type=str, default=str(DEFAULT_ENV_PATH))
-    parser.add_argument("--symbol", type=str, default=os.getenv("BINANCE_SYMBOL") or "BTC/USD")
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default=os.getenv("BINANCE_SYMBOL") or "BTC/USDT:USDT",
+    )
     parser.add_argument(
         "--execute",
         action="store_true",
@@ -78,11 +82,12 @@ def main() -> None:
     )
 
     load_env(args.env)
+    symbol = canonicalize_symbol(args.symbol)
     client = build_binance_client()
     adapter = BinanceBrokerAdapter(client)
-    order_symbol = adapter.format_order_symbol(args.symbol)
+    order_symbol = adapter.format_order_symbol(symbol)
 
-    LOGGER.info("查看部位 | feed_symbol=%s order_symbol=%s", args.symbol, order_symbol)
+    LOGGER.info("查看部位 | feed_symbol=%s order_symbol=%s", symbol, order_symbol)
     position = client.get_position(order_symbol)
     if not position:
         LOGGER.warning("找不到任何開倉部位")

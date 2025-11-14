@@ -31,6 +31,7 @@ from strategies.star_xgb.runtime import (
     generate_realtime_signal,
     load_star_model,
 )
+from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="star_xgb realtime engine (websocket driven)"
     )
-    parser.add_argument("--symbol", type=str, default="BTC/USD")
+    parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument(
         "--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)"
@@ -57,7 +58,7 @@ def main() -> None:
     parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
     parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
     parser.add_argument("--ohlcv-db", type=Path, default=DEFAULT_MARKET_DB)
-    parser.add_argument("--exchange", type=str, default="binance")
+    parser.add_argument("--exchange", type=str, default="binanceusdm")
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
     args = parser.parse_args()
 
@@ -125,7 +126,7 @@ class StarRealtimeEngine:
         exchange: str,
         exchange_config: Optional[Dict] = None,
     ) -> None:
-        self.symbol = symbol
+        self.symbol = canonicalize_symbol(symbol)
         self.timeframe = timeframe
         self.strategy = strategy
         self.lookback_days = lookback_days
@@ -136,7 +137,7 @@ class StarRealtimeEngine:
         self.exchange_config = exchange_config
 
         record = load_strategy_params(
-            self.params_store_path, strategy, symbol, timeframe
+            self.params_store_path, strategy, self.symbol, timeframe
         )
         if record is None or not isinstance(record.params, dict):
             raise RuntimeError(f"找不到策略 {strategy} 的參數設定")
@@ -177,7 +178,7 @@ class StarRealtimeEngine:
         )
 
         runtime_record = load_runtime_state(
-            self.state_store_path, strategy, symbol, timeframe
+            self.state_store_path, strategy, self.symbol, timeframe
         )
         self.runtime_state = StarRuntimeState.from_dict(
             runtime_record.state if runtime_record else None
@@ -208,7 +209,7 @@ class StarRealtimeEngine:
 
         LOGGER.info("初始化 OHLCV 資料 (REST)")
         raw_df = fetch_yearly_ohlcv(
-            symbol=symbol,
+            symbol=self.symbol,
             timeframe=timeframe,
             lookback_days=lookback_days,
             exchange_id=exchange,
@@ -218,7 +219,7 @@ class StarRealtimeEngine:
         )
         prepared = prepare_ohlcv_frame(raw_df, timeframe)
         if prepared.empty:
-            raise RuntimeError(f"{symbol} {timeframe} 無歷史 OHLCV 資料")
+            raise RuntimeError(f"{self.symbol} {timeframe} 無歷史 OHLCV 資料")
 
         self.data_lock = threading.Lock()
         self.db_conn = ensure_database(market_db_path)

@@ -15,6 +15,7 @@ from data_pipeline.ccxt_fetcher import (
     prune_older_rows,
     upsert_ohlcv_rows,
 )
+from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Backfill OHLCV data into SQLite store"
     )
-    parser.add_argument("symbol", help="symbol, e.g. BTC/USD")
+    parser.add_argument("symbol", help="symbol, e.g. BTC/USDT:USDT")
     parser.add_argument("timeframe", help="timeframe, e.g. 5m")
     parser.add_argument("lookback_days", type=int, help="days to backfill")
     parser.add_argument(
@@ -33,7 +34,7 @@ def main() -> None:
         help="SQLite database path",
     )
     parser.add_argument(
-        "--exchange", default="binance", help="Exchange id supported by ccxt"
+        "--exchange", default="binanceusdm", help="Exchange id supported by ccxt"
     )
     parser.add_argument(
         "--prune", action="store_true", help="Prune older rows beyond lookback window"
@@ -57,16 +58,19 @@ def main() -> None:
         return
 
     conn = ensure_database(args.db)
+    canonical_symbol = canonicalize_symbol(args.symbol)
     rows = dataframe_to_rows(df)
-    inserted = upsert_ohlcv_rows(conn, args.symbol, args.timeframe, rows)
-    LOGGER.info("Inserted %s rows into %s", inserted, args.db)
+    inserted = upsert_ohlcv_rows(conn, canonical_symbol, args.timeframe, rows)
+    LOGGER.info(
+        "Inserted %s rows into %s for %s", inserted, args.db, canonical_symbol
+    )
 
     if args.prune:
         utc_now = datetime.now(timezone.utc)
         keep_from_ms = int(
             (utc_now.timestamp() * 1000) - args.lookback_days * 86400 * 1000
         )
-        pruned = prune_older_rows(conn, args.symbol, args.timeframe, keep_from_ms)
+        pruned = prune_older_rows(conn, canonical_symbol, args.timeframe, keep_from_ms)
         LOGGER.info("Pruned %s old rows", pruned)
 
     conn.close()

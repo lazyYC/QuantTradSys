@@ -3,6 +3,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from utils.symbols import canonicalize_symbol
+
 MILLIS_PER_DAY = 86_400_000
 
 
@@ -16,7 +18,7 @@ def main() -> None:
         default=Path("storage/market_data.db"),
         help="SQLite database path",
     )
-    parser.add_argument("--symbol", required=True, help="Trading symbol, e.g. BTC/USD")
+    parser.add_argument("--symbol", required=True, help="Trading symbol, e.g. BTC/USDT")
     parser.add_argument("--timeframe", required=True, help="Timeframe, e.g. 5m")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
@@ -32,13 +34,14 @@ def main() -> None:
 
     conn = sqlite3.connect(args.db)
     try:
+        canonical_symbol = canonicalize_symbol(args.symbol)
         if args.days is not None:
             prune_recent_days(
-                conn, args.symbol, args.timeframe, args.days, args.dry_run
+                conn, canonical_symbol, args.timeframe, args.days, args.dry_run
             )
         else:
             prune_recent_limit(
-                conn, args.symbol, args.timeframe, args.limit, args.dry_run
+                conn, canonical_symbol, args.timeframe, args.limit, args.dry_run
             )
     finally:
         conn.close()

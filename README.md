@@ -45,14 +45,13 @@ $env:PYTHONPATH = 'src'         # 執行 scripts/* 前必須設定
 ## 資料回補
 
 ```powershell
-python scripts/backfill_ohlcv.py BTC/USD 5m 365 ^
-    --db storage/market_data.db --exchange binance --prune
+python scripts/backfill_ohlcv.py BTC/USDT:USDT 5m 365 ^
+    --db storage/market_data.db --exchange binanceusdm --prune
 ```
 
 - 初次執行會建立 `storage/market_data.db` 及 `ohlcv` 資料表。  
 - 每筆資料同時寫入 `ts`（毫秒）與 `iso_ts`（UTC ISO8601），方便人工檢視。  
 - `--prune` 會刪除觀察窗以外的舊資料，二次執行只補缺口。
-- Note: as of 2025-10 the default pair is BTC/USD. If storage/market_data.db still contains legacy BTC/USDT rows, remove the old files under storage/, backfill data again, retrain strategies, and refresh runtime state.
 
 ## Optuna 調參
 
@@ -60,7 +59,7 @@ python scripts/backfill_ohlcv.py BTC/USD 5m 365 ^
 
 ```powershell
 python scripts/pipeline_run_mean_rev.py ^
-    --symbol BTC/USD --timeframe 5m ^
+    --symbol BTC/USDT --timeframe 5m ^
     --lookback-days 400 ^
     --n-trials 200 ^
     --study-name mean_rev_prod ^
@@ -71,8 +70,9 @@ python scripts/pipeline_run_mean_rev.py ^
 
 ```powershell
 python scripts/pipeline_run_star_xgb.py ^
-    --symbol BTC/USD --timeframe 5m ^
+    --symbol BTC/USDT:USDT --timeframe 5m ^
     --lookback-days 360 --test-days 30 ^
+    --exchange binanceusdm ^
     --n-trials 80 ^
     --study-name star_xgb_prod ^
     --storage sqlite:///storage/optuna_studies.db
@@ -86,7 +86,7 @@ python scripts/pipeline_run_star_xgb.py ^
 
 ```powershell
 python scripts/render_star_xgb_report.py ^
-    --symbol BTC/USD --timeframe 5m ^
+    --symbol BTC/USDT:USDT --timeframe 5m ^
     --strategy star_xgb_prod --dataset test ^
     --output reports/star_xgb_latest.html
 ```
@@ -96,7 +96,7 @@ python scripts/render_mean_reversion_report.py ^
     --ohlcv-db storage/market_data.db ^
     --trades-db storage/strategy_state.db ^
     --metrics-db storage/strategy_state.db ^
-    --symbol BTC/USD --timeframe 5m ^
+    --symbol BTC/USDT --timeframe 5m ^
     --start 2025-01-01T00:00Z --end 2025-12-31T23:55Z ^
     --output reports/mean_rev_latest.html
 ```
@@ -109,15 +109,16 @@ python scripts/render_mean_reversion_report.py ^
 
 ```powershell
 python src/run_star_xgb_scheduler.py ^
-    --strategy star_xgb_prod --symbol BTC/USD --timeframe 5m ^
+    --strategy star_xgb_prod --symbol BTC/USDT:USDT --timeframe 5m ^
     --lookback-days 60 ^
     --params-db storage/strategy_state.db ^
-    --state-db storage/strategy_state.db
+    --state-db storage/strategy_state.db ^
+    --exchange binanceusdm
 ```
 
 ```powershell
 python src/run_mean_reversion_scheduler.py ^
-    --strategy mean_rev_prod --symbol BTC/USD --timeframe 5m ^
+    --strategy mean_rev_prod --symbol BTC/USDT --timeframe 5m ^
     --lookback-days 400 --interval-minutes 5
 ```
 

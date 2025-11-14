@@ -22,6 +22,7 @@ LOGGER = logging.getLogger(__name__)
 _ALPACA_CLIENT: Optional[AlpacaPaperTradingClient] = None
 _BINANCE_PRICE_CLIENT: Optional[ccxt.Exchange] = None
 _BINANCE_TRADE_CLIENT: Optional[BinanceUSDMClient] = None
+_DEFAULT_SYMBOL = canonicalize_symbol(os.getenv("DEFAULT_TRADING_SYMBOL", "BTC/USDT:USDT"))
 
 
 class TradingBrokerAdapter(Protocol):
@@ -82,12 +83,8 @@ class BinanceBrokerAdapter:
         self._client = client
 
     def format_order_symbol(self, canonical_symbol: str) -> str:
-        exchange_id = os.getenv("BINANCE_ORDER_EXCHANGE", "binance").lower()
-        normalized_exchange = "binance" if exchange_id == "binanceusdm" else exchange_id
-        symbol = to_exchange_symbol(canonical_symbol, normalized_exchange)
-        if exchange_id == "binanceusdm" and symbol.endswith("/USD"):
-            symbol = symbol[:-4] + "/USDT"
-        return symbol
+        exchange_id = os.getenv("BINANCE_ORDER_EXCHANGE", "binanceusdm").lower()
+        return to_exchange_symbol(canonical_symbol, exchange_id)
 
     def submit_market_order(
         self, *, symbol: str, side: str, notional: float
@@ -378,7 +375,8 @@ def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
 
 
 def _normalize_symbol(symbol: Optional[str]) -> str:
-    return canonicalize_symbol(symbol or "BTC/USD")
+    target = symbol or _DEFAULT_SYMBOL
+    return canonicalize_symbol(target)
 
 
 def format_alpaca_symbol(symbol: str) -> str:
@@ -724,7 +722,7 @@ def _get_int_env(name: str, *, default: Optional[int] = None) -> Optional[int]:
 
 
 def _normalize_ccxt_symbol(symbol: str) -> str:
-    exchange_id = os.getenv("CCXT_PRICE_EXCHANGE", "binance")
+    exchange_id = os.getenv("CCXT_PRICE_EXCHANGE", "binanceusdm")
     return to_exchange_symbol(symbol, exchange_id)
 
 

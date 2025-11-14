@@ -37,12 +37,14 @@ from strategies.mean_reversion import (  # noqa: E402
     MeanReversionParams,
     backtest_mean_reversion,
 )
+from utils.symbols import canonicalize_symbol  # noqa: E402
 
 TITLE_DEFAULT = "Mean Reversion Report"
 
 
 def main() -> None:
     args = parse_args()
+    args.symbol = canonicalize_symbol(args.symbol)
     start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
     if start_ts and end_ts and start_ts > end_ts:
         raise SystemExit("start 需早於 end")
@@ -169,7 +171,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset", default="all", help="資料集標籤，例如 train/test/all"
     )
-    parser.add_argument("--symbol", default="BTC/USD", help="交易對")
+    parser.add_argument("--symbol", default="BTC/USDT", help="交易對")
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="特定 run_id")
     parser.add_argument("--title", default=TITLE_DEFAULT, help="報表標題")

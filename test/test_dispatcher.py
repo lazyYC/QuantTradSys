@@ -32,7 +32,7 @@ class DispatcherTests(TestCase):
         mock_execute.return_value = (True, "ok")
         result = dispatcher.dispatch_signal(
             "ENTER_LONG",
-            {"symbol": "BTC/USD", "price": 30000.0},
+            {"symbol": "BTC/USDT:USDT", "price": 30000.0},
             env_path=SRC_DIR / "config" / ".env",
         )
         mock_execute.assert_called_once()
@@ -40,10 +40,10 @@ class DispatcherTests(TestCase):
         self.assertTrue(result)
 
     def test_normalize_symbol_variants(self) -> None:
-        self.assertEqual(dispatcher._normalize_symbol("BTC-USDT"), "BTC/USD")
+        self.assertEqual(dispatcher._normalize_symbol("BTC-USDT"), "BTC/USDT")
         self.assertEqual(dispatcher._normalize_symbol("btcusd"), "BTC/USD")
-        self.assertEqual(dispatcher._normalize_symbol(None), "BTC/USD")
-        self.assertEqual(dispatcher.format_alpaca_symbol("BTC/USD"), "BTCUSD")
+        self.assertEqual(dispatcher._normalize_symbol(None), "BTC/USDT:USDT")
+        self.assertEqual(dispatcher.format_alpaca_symbol("BTC/USDT"), "BTCUSD")
 
 
 if __name__ == "__main__":

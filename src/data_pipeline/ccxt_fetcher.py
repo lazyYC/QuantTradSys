@@ -88,6 +88,23 @@ def fetch_yearly_ohlcv(
             if pruned:
                 LOGGER.debug("Pruned %s obsolete rows", pruned)
         df = load_ohlcv_window(conn, canonical_symbol, timeframe, window_start_ms)
+        if not df.empty:
+            backfilled = _backfill_missing_candles(
+                conn=conn,
+                exchange=exchange,
+                exchange_symbol=exchange_symbol,
+                canonical_symbol=canonical_symbol,
+                timeframe=timeframe,
+                df=df,
+            )
+            if backfilled:
+                LOGGER.info(
+                    "Backfilled %s historical candles for %s %s",
+                    backfilled,
+                    canonical_symbol,
+                    timeframe,
+                )
+                df = load_ohlcv_window(conn, canonical_symbol, timeframe, window_start_ms)
         conn.close()
     else:
         df = build_dataframe(new_rows)
@@ -339,6 +356,74 @@ def load_ohlcv_window(
         return df
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     return df
+
+
+def _backfill_missing_candles(
+    *,
+    conn: sqlite3.Connection,
+    exchange: ccxt.Exchange,
+    exchange_symbol: str,
+    canonical_symbol: str,
+    timeframe: str,
+    df: pd.DataFrame,
+) -> int:
+    """Detect gaps in stored OHLCV data and refetch missing candles."""
+    timeframe_ms = timeframe_to_milliseconds(timeframe)
+    windows = _find_missing_windows(df, timeframe_ms)
+    if not windows:
+        return 0
+
+    total_inserted = 0
+    for start_ms, end_ms in windows:
+        start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+        end_iso = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+        LOGGER.warning(
+            "Detected gap for %s %s between %s and %s; attempting refetch",
+            canonical_symbol,
+            timeframe,
+            start_iso,
+            end_iso,
+        )
+        end_dt = end_iso
+        rows = fetch_ohlcv_batches(
+            exchange,
+            exchange_symbol,
+            timeframe,
+            start_ms,
+            end_dt,
+        )
+        if not rows:
+            LOGGER.warning(
+                "Refetch returned no candles for gap %s - %s (%s %s)",
+                start_iso,
+                end_iso,
+                canonical_symbol,
+                timeframe,
+            )
+            continue
+        inserted = upsert_ohlcv_rows(conn, canonical_symbol, timeframe, rows)
+        total_inserted += inserted
+    return total_inserted
+
+
+def _find_missing_windows(df: pd.DataFrame, timeframe_ms: int) -> List[tuple[int, int]]:
+    """Return start/end (ms) ranges for missing candles inside df."""
+    if df.empty:
+        return []
+    timestamps = df["timestamp"].astype("int64") // 1_000_000  # to milliseconds
+    windows: List[tuple[int, int]] = []
+    prev = int(timestamps.iloc[0])
+    for current in timestamps.iloc[1:]:
+        curr_val = int(current)
+        gap = curr_val - prev
+        if gap > timeframe_ms:
+            missing_count = gap // timeframe_ms - 1
+            if missing_count > 0:
+                start_missing = prev + timeframe_ms
+                end_missing = curr_val - timeframe_ms
+                windows.append((start_missing, end_missing))
+        prev = curr_val
+    return windows
 
 
 __all__ = [

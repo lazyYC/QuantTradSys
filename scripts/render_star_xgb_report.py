@@ -36,12 +36,14 @@ from persistence.trade_store import load_metrics, load_trades  # noqa: E402
 from strategies.data_utils import prepare_ohlcv_frame  # noqa: E402
 from strategies.star_xgb.backtest import backtest_star_xgb  # noqa: E402
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams  # noqa: E402
+from utils.symbols import canonicalize_symbol  # noqa: E402
 
 TITLE_DEFAULT = "Star XGB Report"
 
 
 def main() -> None:
     args = parse_args()
+    args.symbol = canonicalize_symbol(args.symbol)
     args.title = args.strategy
     start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
     if start_ts and end_ts and start_ts > end_ts:
@@ -749,7 +751,7 @@ def parse_args() -> argparse.Namespace:
         choices=["train", "valid", "test", "all"],
         help="選擇要呈現的資料集（train / valid / test / all）",
     )
-    parser.add_argument("--symbol", default="BTC/USD", help="交易對")
+    parser.add_argument("--symbol", default="BTC/USDT:USDT", help="交易對")
     parser.add_argument("--timeframe", default="5m", help="時間框架")
     parser.add_argument("--run-id", help="指定 run_id")
     parser.add_argument(
