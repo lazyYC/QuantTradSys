@@ -68,7 +68,12 @@ def backtest_star_xgb(
     labels, thresholds_used = build_label_frame(
         features, indicator_params, thresholds=label_thresholds
     )
-    dataset = build_training_dataset(features, labels, class_thresholds=thresholds_used)
+    dataset = build_training_dataset(
+        features,
+        labels,
+        class_thresholds=thresholds_used,
+        min_abs_future_return=indicator_params.future_return_threshold,
+    )
 
     if dataset.empty:
         return StarBacktestResult(

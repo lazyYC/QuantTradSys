@@ -84,11 +84,6 @@ def build_label_frame(
     return_class = future_long_return.apply(_assign_class).astype(int)
 
     label_frame = features[["timestamp"]].copy()
-    label_frame["candidate"] = (
-        (features["upper_shadow_ratio"] >= params.upper_shadow_min)
-        & (features["body_ratio"] <= params.body_ratio_max)
-        & (features["volume_ratio"] <= params.volume_ratio_max)
-    ).astype(int)
     label_frame["future_close_return"] = future_close_return
     label_frame["future_min_return"] = future_min_return
     label_frame["future_short_return"] = future_short_return

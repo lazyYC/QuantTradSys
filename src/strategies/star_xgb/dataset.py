@@ -18,12 +18,16 @@ def build_training_dataset(
     labels: pd.DataFrame,
     *,
     class_thresholds: Dict[str, float],
+    min_abs_future_return: Optional[float] = None,
 ) -> pd.DataFrame:
     """合併特徵與標籤，產生訓練用的完整資料表。"""
     df = features.merge(labels, on="timestamp", how="inner", suffixes=("", "_label"))
     df = df.dropna(subset=["future_short_return", "future_long_return"])
     df = df.sort_values("timestamp").reset_index(drop=True)
     df[SAMPLE_WEIGHT_COLUMN] = 1.0
+    if min_abs_future_return and min_abs_future_return > 0:
+        mask = df["future_long_return"].abs() >= float(min_abs_future_return)
+        df = df[mask].reset_index(drop=True)
     df["q10"] = class_thresholds.get("q10", 0.0)
     df["q25"] = class_thresholds.get("q25", 0.0)
     df["q75"] = class_thresholds.get("q75", 0.0)
@@ -106,7 +110,6 @@ def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
         "timestamp",
         TARGET_COLUMN,
         SAMPLE_WEIGHT_COLUMN,
-        "candidate",
         "future_close_return",
         "future_min_return",
         "future_short_return",

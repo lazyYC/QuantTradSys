@@ -320,6 +320,10 @@ def _simulate_trades(
                         "exit_reason": "stop_loss"
                         if stop_triggered
                         else "signal_reversal",
+                        "entry_zscore": open_trade.get(
+                            "entry_zscore", open_trade["entry_expected_return"]
+                        ),
+                        "exit_zscore": expected_ret,
                     }
                 )
                 open_trade = None
@@ -336,6 +340,7 @@ def _simulate_trades(
                     "entry_idx": idx,
                     "min_exit_idx": idx + min_hold,
                     "entry_class": predicted_class,
+                    "entry_zscore": expected_ret,
                 }
             elif predicted_class == -2.0:
                 open_trade = {
@@ -346,6 +351,7 @@ def _simulate_trades(
                     "entry_idx": idx,
                     "min_exit_idx": idx + min_hold,
                     "entry_class": predicted_class,
+                    "entry_zscore": expected_ret,
                 }
 
     if open_trade is not None:
@@ -377,6 +383,10 @@ def _simulate_trades(
                 "entry_class": open_trade["entry_class"],
                 "exit_class": float(last_row["predicted_class_sim"]),
                 "exit_reason": "end_of_data",
+                "entry_zscore": open_trade.get(
+                    "entry_zscore", open_trade["entry_expected_return"]
+                ),
+                "exit_zscore": float(last_row["expected_return_sim"]),
             }
         )
 

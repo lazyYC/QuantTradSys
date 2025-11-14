@@ -110,7 +110,12 @@ def optimize_star_xgb(
         )
         features = cache.build_features(indicator_params)
         labels, thresholds = build_label_frame(features, indicator_params)
-        dataset = build_training_dataset(features, labels, class_thresholds=thresholds)
+        dataset = build_training_dataset(
+            features,
+            labels,
+            class_thresholds=thresholds,
+            min_abs_future_return=indicator_params.future_return_threshold,
+        )
 
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
             raise optuna.TrialPruned("資料集為空或只有單一類別")
@@ -154,7 +159,10 @@ def optimize_star_xgb(
     train_features = train_cache.build_features(best_indicator)
     train_labels, train_thresholds = build_label_frame(train_features, best_indicator)
     train_dataset = build_training_dataset(
-        train_features, train_labels, class_thresholds=train_thresholds
+        train_features,
+        train_labels,
+        class_thresholds=train_thresholds,
+        min_abs_future_return=best_indicator.future_return_threshold,
     )
 
     training_result = train_star_model(
@@ -378,16 +386,16 @@ def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> b
 
 def _suggest_indicator(trial: Trial) -> StarIndicatorParams:
     return StarIndicatorParams(
-        trend_window=trial.suggest_categorical("trend_window", [30, 45, 60]),
-        slope_window=trial.suggest_categorical("slope_window", [5, 10, 15]),
+        trend_window=trial.suggest_categorical("trend_window", [45, 60, 75]),
+        slope_window=trial.suggest_categorical("slope_window", [5, 10]),
         atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
         volatility_window=trial.suggest_categorical("volatility_window", [15, 20, 30]),
         volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
         pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
-        upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.55, 0.8, step=0.05),
-        body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.35, step=0.05),
-        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 1.0, step=0.1),
-        future_window=trial.suggest_categorical("future_window", [3, 5, 7]),
+        upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
+        body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.25, step=0.025),
+        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 0.9, step=0.05),
+        future_window=trial.suggest_categorical("future_window", [5, 7]),
         future_return_threshold=trial.suggest_float(
             "future_return_threshold", 0.005, 0.02, step=0.0005
         ),
@@ -410,6 +418,6 @@ def _suggest_model(trial: Trial) -> StarModelParams:
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
         decision_threshold=trial.suggest_float(
-            "decision_threshold", 0.001, 0.005, step=0.0005
+            "decision_threshold", 0.004, 0.007, step=0.0005
         ),
     )
