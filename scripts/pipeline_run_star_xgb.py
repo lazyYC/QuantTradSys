@@ -1,4 +1,4 @@
-"""star_xgb 策略訓練 CLI."""
+﻿"""star_xgb 蝑閮毀 CLI."""
 
 from __future__ import annotations
 
@@ -20,27 +20,27 @@ logging.basicConfig(
 )
 
 EXPLANATIONS: Dict[str, str] = {
-    "accuracy": "模型預測K棒漲跌類別的準確率。",
-    "mae_expected": "預期報酬的平均絕對誤差，越小代表模型對報酬的預測越準。",
-    "threshold": "觸發交易的預期報酬門檻值。",
-    "trades": "總交易次數。",
-    "total_return": "總報酬率 (幾何複利)。",
-    "avg_return": "平均每筆交易的報酬率。",
-    "win_rate": "勝率，報酬為正的交易筆數佔總交易筆數的比例。",
-    "max_drawdown": "最大回撤，衡量策略可能出現的最大資金回落風險。",
-    "annualized_return": "年化報酬率。",
-    "sharpe": "夏普比率，衡量每單位風險所能帶來的超額報酬。",
-    "short_trades": "做空交易的總次數。",
-    "long_trades": "做多交易的總次數。",
-    "short_total_return": "做空交易的總報酬率。",
-    "long_total_return": "做多交易的總報酬率。",
-    "short_win_rate": "做空交易的勝率。",
-    "long_win_rate": "做多交易的勝率。",
-    "mean_expected_short": "做空訊號的平均預期報酬。",
-    "mean_expected_long": "做多訊號的平均預期報酬。",
-    "short_avg_best_return": "做空交易在持有期內可能達到的平均最佳報酬。",
-    "long_avg_best_return": "做多交易在持有期內可能達到的平均最佳報酬。",
-    "score": "Optuna 優化時使用的目標分數 (此處為總報酬)。",
+    "accuracy": "璅∪??葫K璉撞頝??亦?皞Ⅱ??,
+    "mae_expected": "???梢?像??撠炊撌殷?頞?隞?”璅∪?撠?祉??葫頞???,
+    "threshold": "閫貊鈭斗?????祇?瑼餃潦?,
+    "trades": "蝮賭漱?活?詻?,
+    "total_return": "蝮賢?祉? (撟曆?銴)??,
+    "avg_return": "撟喳?瘥?鈭斗???祉???,
+    "win_rate": "??嚗?祉甇??鈭斗?蝑雿蜇鈭斗?蝑??靘?,
+    "max_drawdown": "?憭批??歹?銵⊿?蝑?航?箇??憭扯????賡◢?芥?,
+    "annualized_return": "撟游??梢??,
+    "sharpe": "憭瘥?嚗﹛???桐?憸券??賢葆靘?頞??梢??,
+    "short_trades": "?征鈭斗??蜇甈⊥??,
+    "long_trades": "??鈭斗??蜇甈⊥??,
+    "short_total_return": "?征鈭斗??蜇?梢??,
+    "long_total_return": "??鈭斗??蜇?梢??,
+    "short_win_rate": "?征鈭斗?????,
+    "long_win_rate": "??鈭斗?????,
+    "mean_expected_short": "?征閮??像????研?,
+    "mean_expected_long": "??閮??像????研?,
+    "short_avg_best_return": "?征鈭斗??冽????批?賡??啁?撟喳??雿喳?研?,
+    "long_avg_best_return": "??鈭斗??冽????批?賡??啁?撟喳??雿喳?研?,
+    "score": "Optuna ?芸??蝙?函??格?? (甇方??箇蜇?梢)??,
 }
 
 PERCENT_KEYS = {

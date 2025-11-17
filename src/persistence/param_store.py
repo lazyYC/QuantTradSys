@@ -48,11 +48,17 @@ def save_strategy_params(
     timeframe: str,
     params: Dict[str, Any],
     metrics: Dict[str, Any],
+    *,
+    stop_loss_pct: float = 0.005,
+    transaction_cost: float = 0.001,
 ) -> StrategyRecord:
     """將最佳參數與績效指標寫入資料庫，若存在則覆蓋。"""
     conn = _ensure_connection(db_path)
     now = datetime.now(timezone.utc).isoformat()
-    params_json = json.dumps(params)
+    payload = dict(params)
+    payload["stop_loss_pct"] = stop_loss_pct
+    payload["transaction_cost"] = transaction_cost
+    params_json = json.dumps(payload)
     metrics_json = json.dumps(metrics)
     with conn:
         conn.execute(
@@ -69,7 +75,7 @@ def save_strategy_params(
         strategy=strategy,
         symbol=symbol,
         timeframe=timeframe,
-        params=params,
+        params=payload,
         metrics=metrics,
         updated_at=now,
     )

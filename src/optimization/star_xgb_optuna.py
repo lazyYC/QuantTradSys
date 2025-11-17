@@ -72,6 +72,8 @@ def optimize_star_xgb(
     exchange_id: str = "binance",
     exchange_config: Optional[dict] = None,
     result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
+    transaction_cost: float = TRANSACTION_COST,
+    stop_loss_pct: float = STOP_LOSS_PCT,
 ) -> StarOptunaResult:
     symbol = canonicalize_symbol(symbol)
     study = optuna.create_study(
@@ -128,9 +130,9 @@ def optimize_star_xgb(
                     [model_params],
                     model_dir=Path(tmpdir),
                     valid_days=MIN_VALIDATION_DAYS,
-                    transaction_cost=TRANSACTION_COST,
+                    transaction_cost=transaction_cost,
                     min_validation_days=MIN_VALIDATION_DAYS,
-                    stop_loss_pct=STOP_LOSS_PCT,
+                    stop_loss_pct=stop_loss_pct,
                 )
             except ValueError as exc:
                 raise optuna.TrialPruned(str(exc)) from exc
@@ -171,9 +173,9 @@ def optimize_star_xgb(
         [best_model_params],
         model_dir=model_dir,
         valid_days=0,  # 使用全部訓練資料
-        transaction_cost=TRANSACTION_COST,
+        transaction_cost=transaction_cost,
         min_validation_days=MIN_VALIDATION_DAYS,
-        stop_loss_pct=STOP_LOSS_PCT,
+        stop_loss_pct=stop_loss_pct,
     )
 
     inner_validation_days = max(
@@ -240,8 +242,8 @@ def optimize_star_xgb(
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
         core_start=train_core_start,
-        transaction_cost=TRANSACTION_COST,
-        stop_loss_pct=STOP_LOSS_PCT,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     valid_bt_result = backtest_star_xgb(
@@ -255,8 +257,8 @@ def optimize_star_xgb(
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
         core_start=validation_start,
-        transaction_cost=TRANSACTION_COST,
-        stop_loss_pct=STOP_LOSS_PCT,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     test_bt_result = backtest_star_xgb(
@@ -270,8 +272,8 @@ def optimize_star_xgb(
         feature_columns=training_result.feature_columns,
         feature_stats=training_result.feature_stats,
         core_start=test_start,
-        transaction_cost=TRANSACTION_COST,
-        stop_loss_pct=STOP_LOSS_PCT,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
     )
 
     # 儲存結果
@@ -295,6 +297,8 @@ def optimize_star_xgb(
                 timeframe=timeframe,
                 params=params_payload,
                 metrics=format_metrics(test_bt_result.metrics),
+                stop_loss_pct=stop_loss_pct,
+                transaction_cost=transaction_cost,
             )
 
         if trades_store_path:
