@@ -1,4 +1,4 @@
-"""均值回歸策略專用的報表與圖表工具。"""
+"""Reusable Plotly table helpers for strategy reports."""
 
 from __future__ import annotations
 
@@ -7,36 +7,6 @@ from typing import Iterable, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-
-
-def rankings_to_dataframe(rankings: Iterable[Mapping[str, object]]) -> pd.DataFrame:
-    """將網格搜尋結果轉換為 DataFrame，方便下游統計。"""
-    if rankings is None:
-        return pd.DataFrame()
-    frame = pd.DataFrame(list(rankings))
-    if frame.empty:
-        return frame
-    numeric_cols = [
-        "annualized_return",
-        "total_return",
-        "sharpe",
-        "max_drawdown",
-        "win_rate",
-        "trades",
-        "ma_fast",
-        "ma_slow",
-        "rsi_period",
-        "rsi_threshold",
-    ]
-    for col in numeric_cols:
-        if col in frame.columns:
-            frame[col] = pd.to_numeric(frame[col], errors="coerce")
-    frame["avg_trade_return"] = np.where(
-        frame.get("trades", 0).fillna(0) > 0,
-        frame.get("total_return", 0) / frame.get("trades", 0).replace(0, np.nan),
-        np.nan,
-    )
-    return frame
 
 
 def _format_series_for_table(
@@ -63,7 +33,6 @@ def _table_layout_settings(
     min_height: int = 180,
     max_height: int | None = None,
 ) -> dict[str, object]:
-    """計算表格適合的高度與邊距。"""
     effective_rows = max(row_count, 1)
     base = 76 if title_present else 68
     height = base + 28 * effective_rows
@@ -77,7 +46,6 @@ def _table_layout_settings(
 def create_metrics_table(
     metrics_df: pd.DataFrame, *, title: str | None = None
 ) -> Optional[go.Figure]:
-    """將績效指標轉為 Plotly 表格。"""
     if metrics_df is None or metrics_df.empty:
         return None
     display_cols = [
@@ -121,7 +89,6 @@ def create_metrics_table(
 def create_params_table(
     params: Mapping[str, object] | None, *, title: str | None = None
 ) -> Optional[go.Figure]:
-    """將策略參數以表格呈現。"""
     if not params:
         return None
     series = pd.Series(params)
@@ -147,7 +114,6 @@ def create_params_table(
 def create_trade_distribution_table(
     trades: pd.DataFrame, *, title: str | None = None
 ) -> Optional[go.Figure]:
-    """計算交易報酬與持有時間的摘要統計。"""
     if trades is None or trades.empty:
         return None
     closed = trades.dropna(subset=["exit_time"]).copy()
@@ -192,7 +158,6 @@ def create_trade_distribution_table(
 def create_top_trades_table(
     trades: pd.DataFrame, *, top_n: int | None = None, title: str | None = None
 ) -> Optional[go.Figure]:
-    """列出前 N 筆交易結果。"""
     if trades is None or trades.empty:
         return None
     closed = trades.dropna(subset=["exit_time"]).copy()
@@ -247,3 +212,11 @@ def create_top_trades_table(
     )
     fig.update_layout(title=title, template="plotly_white", **layout_kwargs)
     return fig
+
+
+__all__ = [
+    "create_metrics_table",
+    "create_params_table",
+    "create_trade_distribution_table",
+    "create_top_trades_table",
+]

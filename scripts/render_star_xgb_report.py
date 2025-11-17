@@ -24,7 +24,7 @@ if str(SRC_DIR) not in sys.path:
 
 FAVICON_PATH = SRC_DIR / "config" / "favicon.png"
 
-from reporting.mean_reversion_report import (  # noqa: E402
+from reporting.tables import (  # noqa: E402
     create_metrics_table,
     create_params_table,
     create_top_trades_table,
