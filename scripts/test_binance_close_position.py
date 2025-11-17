@@ -24,13 +24,28 @@ from brokers.binance import (
 from config.env import DEFAULT_ENV_PATH, load_env
 from notifier.dispatcher import (
     BinanceBrokerAdapter,
-    _configure_binance_symbol,
-    _get_bool_env,
-    _get_int_env,
+    _configure_binance_symbol
 )
 from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger("binance_close_tester")
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _get_int(name: str, *, default: Optional[int] = None) -> Optional[int]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def build_binance_client() -> BinanceUSDMClient:
@@ -39,8 +54,8 @@ def build_binance_client() -> BinanceUSDMClient:
     if not api_key or not api_secret:
         raise SystemExit("缺少 BINANCE_API_KEY / BINANCE_API_SECRET，無法建立客戶端")
 
-    sandbox = _get_bool_env("BINANCE_SANDBOX", True)
-    recv_window = _get_int_env("BINANCE_RECV_WINDOW", default=5000) or 5000
+    sandbox = _get_bool("BINANCE_SANDBOX", True)
+    recv_window = _get_int("BINANCE_RECV_WINDOW", default=5000) or 5000
     default_symbol = os.getenv("BINANCE_DEFAULT_SYMBOL")
 
     client = BinanceUSDMClient(
@@ -61,7 +76,8 @@ def main() -> None:
     parser.add_argument(
         "--symbol",
         type=str,
-        default=os.getenv("BINANCE_SYMBOL") or "BTC/USDT:USDT",
+        default=None,
+        help="Override feed symbol; falls back to BINANCE_SYMBOL or BTC/USDT:USDT",
     )
     parser.add_argument(
         "--execute",
@@ -82,7 +98,9 @@ def main() -> None:
     )
 
     load_env(args.env)
-    symbol = canonicalize_symbol(args.symbol)
+    env_symbol = os.getenv("BINANCE_SYMBOL")
+    symbol_input = args.symbol or env_symbol or "BTC/USDT:USDT"
+    symbol = canonicalize_symbol(symbol_input)
     client = build_binance_client()
     adapter = BinanceBrokerAdapter(client)
     order_symbol = adapter.format_order_symbol(symbol)
