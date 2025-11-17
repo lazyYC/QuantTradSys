@@ -1,4 +1,4 @@
-"""star_xgb 策略報表生成腳本。"""
+﻿"""star_xgb 蝑?梯”???單??""
 
 from __future__ import annotations
 
@@ -44,10 +44,10 @@ TITLE_DEFAULT = "Star XGB Report"
 def main() -> None:
     args = parse_args()
     args.symbol = canonicalize_symbol(args.symbol)
-    args.title = args.strategy
+    args.title = args.title or args.strategy
     start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
     if start_ts and end_ts and start_ts > end_ts:
-        raise SystemExit("起始時間需早於結束時間")
+        raise SystemExit("韏瑕?????拇蝯???")
 
     candles = pd.DataFrame()
     if args.ohlcv:
@@ -64,7 +64,7 @@ def main() -> None:
             end_ts=end_ts,
         )
     if candles.empty:
-        raise SystemExit("無法取得 K 線資料，請確認輸入來源。")
+        raise SystemExit("?⊥??? K 蝺???隢Ⅱ隤撓?乩?皞?)
 
     force_rerun = bool(args.rerun_backtest)
     params_dict: Optional[Mapping[str, object]] = None
@@ -200,7 +200,7 @@ def main() -> None:
             params_dict = record.params
 
     if metrics_df.empty and not trades_df.empty:
-        # 以交易資料估算基本績效，避免報表為空。
+        # 隞乩漱???摯蝞?祉蜀???踹??梯”?箇征??
         wins = (pd.to_numeric(trades_df["return"], errors="coerce") > 0).mean()
         total_return = (
             pd.to_numeric(trades_df["return"], errors="coerce").add(1).prod() - 1
@@ -311,14 +311,14 @@ def main() -> None:
         sections=sections if sections else None,
     )
     if not figures:
-        raise SystemExit("沒有可輸出的圖表或表格，請確認資料來源。")
+        raise SystemExit("瘝??航撓?箇??”?”?潘?隢Ⅱ隤???皞?)
     _write_html(figures, Path(args.output), args.title)
 
 
 def _parse_time_boundaries(
     start: str | None, end: str | None
 ) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    """解析時間區間參數。"""
+    """閫????????詻?""
     start_ts = pd.to_datetime(start, utc=True, errors="coerce") if start else None
     end_ts = pd.to_datetime(end, utc=True, errors="coerce") if end else None
     return start_ts, end_ts
@@ -330,7 +330,7 @@ def _filter_by_time(
     start_ts: pd.Timestamp | None,
     end_ts: pd.Timestamp | None,
 ) -> pd.DataFrame:
-    """依據時間區間過濾資料。"""
+    """靘??????瞈曇???""
     if df.empty or column not in df.columns:
         return df
     frame = df.copy()
@@ -349,9 +349,9 @@ def _load_candles_from_csv(
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """從 CSV 讀取 K 線資料。"""
+    """敺?CSV 霈??K 蝺???""
     if not path.exists():
-        raise FileNotFoundError(f"找不到 OHLCV 檔案: {path}")
+        raise FileNotFoundError(f"?曆???OHLCV 瑼?: {path}")
     df = pd.read_csv(path)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     numeric_cols = ["open", "high", "low", "close", "volume"]
@@ -371,9 +371,9 @@ def _load_candles_from_db(
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """從 SQLite 讀取 OHLCV 資料。"""
+    """敺?SQLite 霈??OHLCV 鞈???""
     if not db_path.exists():
-        raise FileNotFoundError(f"找不到資料庫: {db_path}")
+        raise FileNotFoundError(f"?曆??啗??澈: {db_path}")
     conn = sqlite3.connect(db_path)
     clause = "symbol = ? AND timeframe = ?"
     params: List[object] = [symbol, timeframe]
@@ -415,7 +415,7 @@ def _load_trades_from_db(
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """載入策略交易紀錄。"""
+    """頛蝑鈭斗?蝝??""
     candidates: List[Path] = []
     if args.trades_db:
         candidates.append(Path(args.trades_db))
@@ -448,7 +448,7 @@ def _load_metrics_from_db(
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """載入策略績效摘要。"""
+    """頛蝑蝮暹?????""
     candidates: List[Path] = []
     if args.metrics_db:
         candidates.append(Path(args.metrics_db))
@@ -481,7 +481,7 @@ def _load_metrics_from_db(
 
 
 def _build_equity_from_trades(trades: pd.DataFrame) -> pd.DataFrame:
-    """根據交易紀錄推導權益曲線。"""
+    """?寞?鈭斗?蝝?撠??蝺?""
     if trades.empty or {"exit_time", "return"}.difference(trades.columns):
         return pd.DataFrame(columns=["timestamp", "equity"])
     closed = trades.dropna(subset=["exit_time", "return"]).copy()
@@ -500,7 +500,7 @@ def _run_backtest_from_params(
     transaction_cost: float,
     stop_loss_pct: float,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Mapping[str, object] | None]:
-    """使用儲存參數重新運行回測，補齊交易與績效資料。"""
+    """雿輻?脣??????葫嚗?朣漱??蝮暹?鞈???""
     if candles.empty or not args.params_db:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None
     record = load_strategy_params(
@@ -578,7 +578,7 @@ def _collect_figures(
     *,
     sections: Optional[List[Mapping[str, object]]] = None,
 ) -> List[Tuple[str, object]]:
-    """組裝圖表與表格。"""
+    """蝯??”?”?潦?""
     figures: List[Tuple[str, object]] = []
     trimmed_trades = trades
     trimmed_equity = equity_df
@@ -648,28 +648,28 @@ def _collect_figures(
                     font=dict(size=11),
                     align="center",
                 )
-        figures.append(("價格與交易", overview))
+        figures.append(("?寞?漱??, overview))
     if params:
         indicator_fig = create_params_table(params.get("indicator"))
         if indicator_fig is not None:
-            figures.append(("指標參數", indicator_fig))
+            figures.append(("???", indicator_fig))
         model_fig = create_params_table(params.get("model"))
         if model_fig is not None:
-            figures.append(("模型參數", model_fig))
+            figures.append(("璅∪??", model_fig))
     metrics_fig = create_metrics_table(metrics_df)
     if metrics_fig is not None:
-        figures.append(("績效摘要", metrics_fig))
+        figures.append(("蝮暹???", metrics_fig))
     distribution_fig = create_trade_distribution_table(trimmed_trades)
     if distribution_fig is not None:
-        figures.append(("交易分布統計", distribution_fig))
+        figures.append(("鈭斗???蝯梯?", distribution_fig))
     trades_table = create_top_trades_table(trimmed_trades)
     if trades_table is not None:
-        figures.append(("交易紀錄", trades_table))
+        figures.append(("鈭斗?蝝??, trades_table))
     return figures
 
 
 def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> None:
-    """輸出 HTML 報表。"""
+    """頛詨 HTML ?梯”??""
     favicon_href: Optional[str] = None
     if FAVICON_PATH.exists():
         try:
@@ -716,58 +716,58 @@ def _write_html(figures: List[Tuple[str, object]], output: Path, title: str) -> 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render star_xgb backtest report")
     parser.add_argument(
-        "--ohlcv", help="含 timestamp/open/high/low/close 的 OHLCV 檔案"
+        "--ohlcv", help="??timestamp/open/high/low/close ??OHLCV 瑼?"
     )
     parser.add_argument(
-        "--ohlcv-db", default="storage/market_data.db", help="儲存 OHLCV 的 SQLite 路徑"
+        "--ohlcv-db", default="storage/market_data.db", help="?脣? OHLCV ??SQLite 頝臬?"
     )
     parser.add_argument(
-        "--lookback-days", type=int, default=360, help="讀取資料的天數視窗"
+        "--lookback-days", type=int, default=360, help="霈????憭拇閬?"
     )
     parser.add_argument(
-        "--output", default="reports/star_xgb_report.html", help="輸出的 HTML 檔案路徑"
+        "--output", default="reports/star_xgb_report.html", help="頛詨??HTML 瑼?頝臬?"
     )
-    parser.add_argument("--start", help="起始時間 (ISO 格式)")
-    parser.add_argument("--end", help="結束時間 (ISO 格式)")
+    parser.add_argument("--start", help="韏瑕??? (ISO ?澆?)")
+    parser.add_argument("--end", help="蝯??? (ISO ?澆?)")
     parser.add_argument(
         "--trades-db",
         default="storage/strategy_state.db",
-        help="策略交易紀錄 SQLite 檔",
+        help="蝑鈭斗?蝝??SQLite 瑼?,
     )
     parser.add_argument(
         "--metrics-db",
         default="storage/strategy_state.db",
-        help="策略績效摘要 SQLite 檔",
+        help="蝑蝮暹??? SQLite 瑼?,
     )
     parser.add_argument(
-        "--params-db", default="storage/strategy_state.db", help="策略參數 SQLite 檔"
+        "--params-db", default="storage/strategy_state.db", help="蝑? SQLite 瑼?
     )
     parser.add_argument(
-        "--strategy", default="star_xgb_default", help="策略名稱 (同 study name)"
+        "--strategy", default="star_xgb_default", help="蝑?迂 (??study name)"
     )
     parser.add_argument(
         "--dataset",
         default="test",
         choices=["train", "valid", "test", "all"],
-        help="選擇要呈現的資料集（train / valid / test / all）",
+        help="?豢?閬??曄?鞈???train / valid / test / all嚗?,
     )
-    parser.add_argument("--symbol", default="BTC/USDT:USDT", help="交易對")
-    parser.add_argument("--timeframe", default="5m", help="時間框架")
-    parser.add_argument("--run-id", help="指定 run_id")
+    parser.add_argument("--symbol", default="BTC/USDT:USDT", help="鈭斗?撠?)
+    parser.add_argument("--timeframe", default="5m", help="??獢")
+    parser.add_argument("--run-id", help="?? run_id")
     parser.add_argument(
-        "--rerun-backtest", action="store_true", help="即使資料庫已有資料也重新回測一次"
+        "--rerun-backtest", action="store_true", help="?喃蝙鞈?摨怠歇??????葫銝甈?
     )
     parser.add_argument(
         "--transaction-cost",
         type=float,
         default=0.0,
-        help="回測時計入的手續費比例（例如 0.001 代表 0.1%）",
+        help="?葫???亦???鞎餅?靘?靘? 0.001 隞?” 0.1%嚗?,
     )
     parser.add_argument(
         "--stop-loss-pct",
         type=float,
         default=0.01,
-        help="回測時套用的停損百分比（例如 0.01 代表 1%）",
+        help="?葫???函????曉?瘥?靘? 0.01 隞?” 1%嚗?,
     )
     return parser.parse_args()
 
