@@ -127,7 +127,9 @@ def optimize_star_xgb(
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
             raise optuna.TrialPruned("資料集為空或只有單一類別")
 
-        def _checkpoint_progress(fraction: float, step: int) -> None:
+        def _checkpoint_progress(
+            fraction: float, step: int, *, allow_prune: bool
+        ) -> None:
             cutoff = int(len(dataset) * fraction)
             if cutoff < 200:
                 return
@@ -152,11 +154,11 @@ def optimize_star_xgb(
                 except Exception:
                     return
             trial.report(metric_value, step=step)
-            if trial.should_prune():
+            if allow_prune and trial.should_prune():
                 raise optuna.TrialPruned(f"Pruned at {int(fraction*100)}% data")
 
-        _checkpoint_progress(0.3, step=1)
-        _checkpoint_progress(0.7, step=2)
+        _checkpoint_progress(0.5, step=1, allow_prune=False)
+        _checkpoint_progress(0.9, step=2, allow_prune=True)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
