@@ -79,11 +79,13 @@ def optimize_star_xgb(
     symbol = canonicalize_symbol(symbol)
     if future_window_choices is None:
         future_window_choices = [5]
+    sampler = optuna.samplers.TPESampler(seed=42, multivariate=True, group=True)
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
         direction="maximize",
         load_if_exists=bool(storage and study_name),
+        sampler=sampler,
     )
 
     raw_df = fetch_yearly_ohlcv(

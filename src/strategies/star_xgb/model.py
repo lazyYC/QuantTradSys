@@ -497,6 +497,10 @@ def _init_model(params: StarModelParams) -> lgb.LGBMClassifier:
         num_class=NUM_CLASSES,
         n_jobs=-1,
         verbosity=-1,
+        random_state=42,
+        bagging_seed=42,
+        feature_fraction_seed=42,
+        deterministic=True,
     )
 
 
