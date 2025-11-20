@@ -435,13 +435,13 @@ def _suggest_indicator(
         volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
         pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
         upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
-        body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.25, step=0.025),
-        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 0.9, step=0.05),
+        body_ratio_max=trial.suggest_float("body_ratio_max", 0.16, 0.22, step=0.02),
+        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.55, 0.8, step=0.05),
         future_window=trial.suggest_categorical(
             "future_window", sorted(set(int(x) for x in future_window_choices))
         ),
         future_return_threshold=trial.suggest_float(
-            "future_return_threshold", 0.005, 0.02, step=0.0005
+            "future_return_threshold", 0.005, 0.015, step=0.0005
         ),
     )
 
@@ -462,6 +462,6 @@ def _suggest_model(trial: Trial) -> StarModelParams:
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
         decision_threshold=trial.suggest_float(
-            "decision_threshold", 0.004, 0.007, step=0.0005
+            "decision_threshold", 0.0045, 0.006, step=0.0005
         ),
     )
