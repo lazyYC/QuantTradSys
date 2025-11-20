@@ -127,6 +127,37 @@ def optimize_star_xgb(
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
             raise optuna.TrialPruned("資料集為空或只有單一類別")
 
+        def _checkpoint_progress(fraction: float, step: int) -> None:
+            cutoff = int(len(dataset) * fraction)
+            if cutoff < 200:
+                return
+            partial_ds = dataset.iloc[:cutoff].reset_index(drop=True)
+            if partial_ds[TARGET_COLUMN].nunique() < 2:
+                return
+            with tempfile.TemporaryDirectory() as tmpdir_ckpt:
+                try:
+                    ckpt_result = train_star_model(
+                        partial_ds,
+                        indicator_params,
+                        [model_params],
+                        model_dir=Path(tmpdir_ckpt),
+                        valid_days=MIN_VALIDATION_DAYS,
+                        transaction_cost=transaction_cost,
+                        min_validation_days=MIN_VALIDATION_DAYS,
+                        stop_loss_pct=stop_loss_pct,
+                    )
+                    metric_value = ckpt_result.validation_metrics.get(
+                        "total_return", 0.0
+                    )
+                except Exception:
+                    return
+            trial.report(metric_value, step=step)
+            if trial.should_prune():
+                raise optuna.TrialPruned(f"Pruned at {int(fraction*100)}% data")
+
+        _checkpoint_progress(0.3, step=1)
+        _checkpoint_progress(0.7, step=2)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 result = train_star_model(
