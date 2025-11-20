@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import optuna
 from optuna import Trial
@@ -74,8 +74,11 @@ def optimize_star_xgb(
     result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
     transaction_cost: float = TRANSACTION_COST,
     stop_loss_pct: float = STOP_LOSS_PCT,
+    future_window_choices: Optional[Sequence[int]] = None,
 ) -> StarOptunaResult:
     symbol = canonicalize_symbol(symbol)
+    if future_window_choices is None:
+        future_window_choices = [5]
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
@@ -99,7 +102,7 @@ def optimize_star_xgb(
         raise ValueError("test set 為空，請檢查資料來源")
 
     def _objective(trial: Trial) -> float:
-        indicator_params = _suggest_indicator(trial)
+        indicator_params = _suggest_indicator(trial, future_window_choices)
         model_params = _suggest_model(trial)
 
         cache = StarFeatureCache(
@@ -388,7 +391,9 @@ def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> b
     return _acquire_result_guard(study.study_name, guard_dir)
 
 
-def _suggest_indicator(trial: Trial) -> StarIndicatorParams:
+def _suggest_indicator(
+    trial: Trial, future_window_choices: Sequence[int]
+) -> StarIndicatorParams:
     return StarIndicatorParams(
         trend_window=trial.suggest_categorical("trend_window", [45, 60, 75]),
         slope_window=trial.suggest_categorical("slope_window", [5, 10]),
@@ -399,7 +404,9 @@ def _suggest_indicator(trial: Trial) -> StarIndicatorParams:
         upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
         body_ratio_max=trial.suggest_float("body_ratio_max", 0.15, 0.25, step=0.025),
         volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.5, 0.9, step=0.05),
-        future_window=trial.suggest_categorical("future_window", [5, 7]),
+        future_window=trial.suggest_categorical(
+            "future_window", sorted(set(int(x) for x in future_window_choices))
+        ),
         future_return_threshold=trial.suggest_float(
             "future_return_threshold", 0.005, 0.02, step=0.0005
         ),

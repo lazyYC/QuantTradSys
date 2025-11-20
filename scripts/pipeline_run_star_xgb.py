@@ -85,6 +85,7 @@ def main() -> None:
         timeout=args.timeout,
         study_name=args.study_name,
         storage=args.storage,
+        future_window_choices=args.future_window_bars,
     )
 
     best_indicator_params = result.best_training_result.indicator_params.as_dict(
@@ -116,6 +117,13 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
     parser.add_argument("--timeframe", type=str, default="5m")
+    parser.add_argument(
+        "--future-window-bars",
+        type=int,
+        nargs="+",
+        default=[5],
+        help="未來報酬視窗（bar 數，與 timeframe 相乘即分鐘），可多值供搜尋，預設 [5] ≈ 25 分",
+    )
     parser.add_argument("--lookback-days", type=int, default=360)
     parser.add_argument("--test-days", type=int, default=30)
     parser.add_argument("--exchange", type=str, default="binanceusdm")
