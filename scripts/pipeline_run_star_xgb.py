@@ -86,6 +86,7 @@ def main() -> None:
         study_name=args.study_name,
         storage=args.storage,
         future_window_choices=args.future_window_bars,
+        use_gpu=args.use_gpu,
     )
 
     best_indicator_params = result.best_training_result.indicator_params.as_dict(
@@ -141,6 +142,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--study-name", type=str, default="star_xgb_default")
     parser.add_argument(
         "--storage", type=str, default="sqlite:///storage/optuna_studies.db"
+    )
+    parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="若安裝 GPU 版 LightGBM，啟用 GPU 訓練（預設關閉）",
     )
     return parser.parse_args()
 

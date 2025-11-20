@@ -51,6 +51,7 @@ def train_star_model(
     transaction_cost: float = 0.0,
     min_validation_days: int = 30,
     stop_loss_pct: Optional[float] = None,
+    use_gpu: bool = False,
 ) -> StarTrainingResult:
     """針對單一指標參數搜尋最佳模型。"""
     if dataset.empty:
@@ -88,7 +89,7 @@ def train_star_model(
     ) = None
 
     for model_params in model_candidates:
-        model = _init_model(model_params)
+        model = _init_model(model_params, device="gpu" if use_gpu else "cpu")
         fitted_model, val_probs = _fit_model(model, train_df, valid_df, feature_cols)
         val_target_df = valid_df if not valid_df.empty else train_df
         metrics = _evaluate(
@@ -479,7 +480,9 @@ def _split_train_valid(
     return base.reset_index(drop=True), valid.reset_index(drop=True)
 
 
-def _init_model(params: StarModelParams) -> lgb.LGBMClassifier:
+def _init_model(
+    params: StarModelParams, *, device: str = "cpu"
+) -> lgb.LGBMClassifier:
     return lgb.LGBMClassifier(
         objective="multiclass",
         boosting_type="gbdt",
@@ -501,6 +504,7 @@ def _init_model(params: StarModelParams) -> lgb.LGBMClassifier:
         bagging_seed=42,
         feature_fraction_seed=42,
         deterministic=True,
+        device=device,
     )
 
 

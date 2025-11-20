@@ -75,6 +75,7 @@ def optimize_star_xgb(
     transaction_cost: float = TRANSACTION_COST,
     stop_loss_pct: float = STOP_LOSS_PCT,
     future_window_choices: Optional[Sequence[int]] = None,
+    use_gpu: bool = False,
 ) -> StarOptunaResult:
     symbol = canonicalize_symbol(symbol)
     if future_window_choices is None:
@@ -142,12 +143,13 @@ def optimize_star_xgb(
                         partial_ds,
                         indicator_params,
                         [model_params],
-                        model_dir=Path(tmpdir_ckpt),
-                        valid_days=MIN_VALIDATION_DAYS,
-                        transaction_cost=transaction_cost,
-                        min_validation_days=MIN_VALIDATION_DAYS,
-                        stop_loss_pct=stop_loss_pct,
-                    )
+                    model_dir=Path(tmpdir_ckpt),
+                    valid_days=MIN_VALIDATION_DAYS,
+                    transaction_cost=transaction_cost,
+                    min_validation_days=MIN_VALIDATION_DAYS,
+                    stop_loss_pct=stop_loss_pct,
+                    use_gpu=use_gpu,
+                )
                     metric_value = ckpt_result.validation_metrics.get(
                         "total_return", 0.0
                     )
@@ -171,6 +173,7 @@ def optimize_star_xgb(
                     transaction_cost=transaction_cost,
                     min_validation_days=MIN_VALIDATION_DAYS,
                     stop_loss_pct=stop_loss_pct,
+                    use_gpu=use_gpu,
                 )
             except ValueError as exc:
                 raise optuna.TrialPruned(str(exc)) from exc
@@ -214,6 +217,7 @@ def optimize_star_xgb(
         transaction_cost=transaction_cost,
         min_validation_days=MIN_VALIDATION_DAYS,
         stop_loss_pct=stop_loss_pct,
+        use_gpu=use_gpu,
     )
 
     inner_validation_days = max(
