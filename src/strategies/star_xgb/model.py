@@ -292,7 +292,7 @@ def _simulate_trades(
                 if side == "LONG":
                     exit_signal = predicted_class in {0.0, -1.0, -2.0}
                 elif side == "SHORT":
-                    exit_signal = predicted_class in {0.0, 1.0, 2.0}
+                    exit_signal = predicted_class in {-1.0, 0.0, 1.0, 2.0}
 
             if stop_triggered or exit_signal:
                 entry_price = open_trade["entry_price"]
