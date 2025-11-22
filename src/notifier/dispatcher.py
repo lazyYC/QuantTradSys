@@ -116,14 +116,6 @@ def dispatch_signal(
         return False
 
     broker = get_trading_broker(env_path=env_path)
-    if broker:
-        symbol_for_price = _normalize_symbol(str(context.get("symbol", "")))
-        exec_ref_price = _get_current_price(context, symbol_for_price, broker_name=broker.name)
-        signal_price = _extract_signal_price(context)
-        if exec_ref_price is not None:
-            context["exec_ref_price"] = exec_ref_price
-        if signal_price is not None and exec_ref_price is not None and signal_price != 0:
-            context["slippage_pct"] = (exec_ref_price - signal_price) / signal_price
 
     webhook = os.getenv("DISCORD_WEBHOOK")
     if webhook:
@@ -150,8 +142,8 @@ def dispatch_signal(
         result_context = {
             "message": f"[{action.upper()}] Execution {status}: {exec_message or 'no details'}",
         }
-        if "exec_ref_price" in context:
-            result_context["exec_ref_price"] = context["exec_ref_price"]
+        if "exec_fill_price" in context:
+            result_context["exec_fill_price"] = context["exec_fill_price"]
         if "signal_price" in context:
             result_context["signal_price"] = context["signal_price"]
         if "slippage_pct" in context:
@@ -192,7 +184,10 @@ def execute_trading(
             if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
                 message = "Price deviation exceeded tolerance"
                 return False, message
-            broker.submit_market_order(symbol=order_symbol, side="buy", notional=notional)
+            order_resp = broker.submit_market_order(
+                symbol=order_symbol, side="buy", notional=notional
+            )
+            _attach_fill_price(context, order_resp)
             LOGGER.info(
                 "Submitted %s LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 broker_label,
@@ -207,7 +202,7 @@ def execute_trading(
             )
         elif action_upper == "EXIT_LONG":
             try:
-                broker.close_position(order_symbol, side="sell")
+                order_resp = broker.close_position(order_symbol, side="sell")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close LONG position: {exc}"
@@ -216,6 +211,7 @@ def execute_trading(
                 LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close LONG position: {exc}"
                 return False, message
+            _attach_fill_price(context, order_resp)
             LOGGER.info(
                 "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -240,7 +236,10 @@ def execute_trading(
             if not _is_price_within_tolerance(context, symbol, broker_name=broker.name):
                 message = "Price deviation exceeded tolerance"
                 return False, message
-            broker.submit_market_order(symbol=order_symbol, side="sell", notional=notional)
+            order_resp = broker.submit_market_order(
+                symbol=order_symbol, side="sell", notional=notional
+            )
+            _attach_fill_price(context, order_resp)
             LOGGER.info(
                 "Submitted %s SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 broker_label,
@@ -255,7 +254,7 @@ def execute_trading(
             )
         elif action_upper == "EXIT_SHORT":
             try:
-                broker.close_position(order_symbol, side="buy")
+                order_resp = broker.close_position(order_symbol, side="buy")
             except AlpacaAPIError as exc:
                 LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close SHORT position: {exc}"
@@ -264,6 +263,7 @@ def execute_trading(
                 LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close SHORT position: {exc}"
                 return False, message
+            _attach_fill_price(context, order_resp)
             LOGGER.info(
                 "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -399,6 +399,42 @@ def _is_price_within_tolerance(
         broker_name.upper(),
     )
     return True
+
+
+def _attach_fill_price(context: Dict[str, Any], order_resp: Dict[str, Any]) -> None:
+    """Parse broker order response to extract fill price and compute slippage."""
+    fill_price = _extract_fill_price(order_resp)
+    if fill_price is None:
+        return
+    context["exec_fill_price"] = fill_price
+    signal_price = _extract_signal_price(context)
+    if signal_price is not None and signal_price != 0:
+        context["slippage_pct"] = (fill_price - signal_price) / signal_price
+
+
+def _extract_fill_price(resp: Dict[str, Any]) -> Optional[float]:
+    """Try common fields from Alpaca / Binance USD-M order responses."""
+    candidates = [
+        resp.get("filled_avg_price"),
+        resp.get("avg_price"),
+        resp.get("avgPrice"),
+        resp.get("price"),
+    ]
+    # Binance fills list
+    fills = resp.get("fills") if isinstance(resp, dict) else None
+    if fills and isinstance(fills, list) and fills:
+        fills_price = fills[0].get("price")
+        candidates.append(fills_price)
+    for val in candidates:
+        try:
+            if val is None:
+                continue
+            price = float(val)
+            if price > 0:
+                return price
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
