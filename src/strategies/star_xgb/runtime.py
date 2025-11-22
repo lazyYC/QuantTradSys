@@ -171,7 +171,7 @@ def generate_realtime_signal(
             if runtime_state.position_side == "LONG":
                 exit_signal = pred_class in {0, -1, -2}
             elif runtime_state.position_side == "SHORT":
-                exit_signal = pred_class in {-1, 0, 1, 2}
+                exit_signal = pred_class in {0, 1, 2}
 
         if (exit_signal or stop_triggered) and timestamp is not None and not np.isnan(
             price
