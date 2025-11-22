@@ -42,9 +42,7 @@ LOGGER = logging.getLogger(__name__)
 
 RESULT_GUARD_DIR = Path("storage/optuna_result_flags")
 
-TRANSACTION_COST = 0.001
 MIN_VALIDATION_DAYS = 30
-STOP_LOSS_PCT = 0.005
 
 
 @dataclass
@@ -72,8 +70,8 @@ def optimize_star_xgb(
     exchange_id: str = "binance",
     exchange_config: Optional[dict] = None,
     result_guard_dir: Optional[Path] = RESULT_GUARD_DIR,
-    transaction_cost: float = TRANSACTION_COST,
-    stop_loss_pct: float = STOP_LOSS_PCT,
+    transaction_cost: float = 0.001,
+    stop_loss_pct: float = 0.005,
     future_window_choices: Optional[Sequence[int]] = None,
     use_gpu: bool = False,
 ) -> StarOptunaResult:
@@ -398,6 +396,14 @@ def optimize_star_xgb(
     )
 
 
+def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
+    if _has_pending_trials(study):
+        return False
+    if guard_dir is None:
+        return True
+    return _acquire_result_guard(study.study_name, guard_dir)
+
+
 def _has_pending_trials(study: optuna.Study) -> bool:
     try:
         pending = study.get_trials(
@@ -421,13 +427,6 @@ def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
         handle.write(datetime.now(timezone.utc).isoformat())
     return True
 
-
-def _should_persist_results(study: optuna.Study, guard_dir: Optional[Path]) -> bool:
-    if _has_pending_trials(study):
-        return False
-    if guard_dir is None:
-        return True
-    return _acquire_result_guard(study.study_name, guard_dir)
 
 
 def _suggest_indicator(
