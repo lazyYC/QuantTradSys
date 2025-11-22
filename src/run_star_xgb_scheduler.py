@@ -39,9 +39,6 @@ DEFAULT_LOG_PATH = Path("storage/logs/star_xgb_scheduler.log")
 DEFAULT_STATE_DB = Path("storage/strategy_state.db")
 DEFAULT_MARKET_DB = Path("storage/market_data.db")
 
-YELLOW = "\033[33m"
-RESET = "\033[0m"
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -327,21 +324,23 @@ class StarRealtimeEngine:
                 "strategy": self.strategy,
                 "symbol": self.symbol,
                 "timeframe": self.timeframe,
-                "source": source,
+                # "source": source,
                 "received_at": datetime.now(timezone.utc).isoformat(),
             }
         )
-
-        colored_action = f"{YELLOW}{action}{RESET}"
-        LOGGER.info("star_xgb action=%s details=%s", colored_action, context)
+        colored_action = self.assign_color(action)
+        context = self.filter_context(context)
+        context["action"] = colored_action
+        context_str = "\n".join([f"{k}: {v}" for k, v in context.items()])
+        context_str += "\n--------------------------------"
+        LOGGER.info(f"{context_str}")
         trade_executed = True
         if action != "HOLD":
             trade_executed = dispatch_signal(action, context)
             if not trade_executed:
-                LOGGER.warning(
-                    "Dispatch reported no execution for action=%s; runtime state unchanged",
-                    action,
-                )
+                warning_msg = f"Dispatch reported no execution for action={action}; runtime state unchanged"
+                colored_warning_msg = self.assign_color(warning_msg, color="RED")
+                LOGGER.warning(colored_warning_msg)
 
         if trade_executed and new_state != self.runtime_state:
             save_runtime_state(
@@ -383,6 +382,33 @@ class StarRealtimeEngine:
 
         return 0.01
 
+    @staticmethod
+    def filter_context(context: Dict[str, object]) -> Dict[str, object]:
+        exclude_keys = ["threshold", "hold_elapsed", "timeframe", "min_exit_timestamp", "source", ]
+        return {k: v for k, v in context.items() if k not in exclude_keys}
+
+    @staticmethod
+    def assign_color(action: str, **kwargs) -> str:
+        color_map = {
+            "GREEN": "\033[32m",
+            "RED": "\033[31m",
+            "YELLOW": "\033[33m",
+            "RESET": "\033[0m",
+        }
+
+        if kwargs.get("color"):
+            return f"{color_map[kwargs["color"]]}{action}{color_map['RESET']}"
+
+        if action == "ENTER_LONG":
+            return f"{color_map['GREEN']}ENTER_LONG{color_map['RESET']}"
+        elif action == "ENTER_SHORT":
+            return f"{color_map['RED']}ENTER_SHORT{color_map['RESET']}"
+        elif action == "EXIT_LONG":
+            return f"{color_map['GREEN']}EXIT_LONG{color_map['RESET']}"
+        elif action == "EXIT_SHORT":
+            return f"{color_map['RED']}EXIT_SHORT{color_map['RESET']}"
+        return f"{color_map['YELLOW']}HOLD{color_map['RESET']}"
+ 
 
 if __name__ == "__main__":
     main()

@@ -125,8 +125,8 @@ def generate_realtime_signal(
     threshold = float(model_params.decision_threshold)
 
     context: Dict[str, object] = {
-        "timestamp": str(latest["timestamp"]),
-        "price": price,
+        "time_utc": str(latest["timestamp"]),
+        "closed_price": price,
         "expected_return": expected_return,
         "predicted_class": int(pred_class),
     }

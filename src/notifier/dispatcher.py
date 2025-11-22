@@ -111,7 +111,6 @@ def dispatch_signal(
     env_path: Optional[Path] = None,
 ) -> bool:
     """Dispatch strategy signal to external channels."""
-    LOGGER.info("Dispatch signal=%s context=%s", action, context)
     load_env(env_path or DEFAULT_ENV_PATH)
     if action.upper() == "HOLD":
         return False
@@ -120,11 +119,11 @@ def dispatch_signal(
     if webhook:
         _send_discord(webhook, action, context)
     else:
-        LOGGER.debug("DISCORD_WEBHOOK not configured, skipping Discord notification")
+        LOGGER.warning("DISCORD_WEBHOOK not configured, skipping Discord notification")
 
     broker = get_trading_broker(env_path=env_path)
     if broker is None:
-        LOGGER.debug("Trading broker unavailable; trading step skipped")
+        LOGGER.warning("Trading broker unavailable; trading step skipped")
         if webhook:
             _send_discord(
                 webhook,
@@ -143,6 +142,8 @@ def dispatch_signal(
             "message": f"[{action.upper()}] Execution {status}: {exec_message or 'no details'}"
         }
         _send_discord(webhook, f"{action}_RESULT", result_context)
+        LOGGER.info(f"Dispatch signal:{action} sent to Discord successfully")
+
     return trade_executed
 
 
