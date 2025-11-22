@@ -156,9 +156,8 @@ def dispatch_signal(
             result_context["signal_price"] = context["signal_price"]
         if "slippage_pct" in context:
             result_context["slippage_pct"] = context["slippage_pct"]
-        }
         _send_discord(webhook, f"{action}_RESULT", result_context)
-        LOGGER.info(f"Dispatch signal:{action} sent to Discord successfully")
+        LOGGER.info(f"Dispatch signal:{action} sent to Discord successfully\n--------------------------------")
 
     return trade_executed
 
