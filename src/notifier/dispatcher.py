@@ -117,12 +117,6 @@ def dispatch_signal(
 
     broker = get_trading_broker(env_path=env_path)
 
-    webhook = os.getenv("DISCORD_WEBHOOK")
-    if webhook:
-        _send_discord(webhook, action, context)
-    else:
-        LOGGER.warning("DISCORD_WEBHOOK not configured, skipping Discord notification")
-
     if broker is None:
         LOGGER.warning("Trading broker unavailable; trading step skipped")
         if webhook:
@@ -134,6 +128,12 @@ def dispatch_signal(
                 },
             )
         return False
+
+    webhook = os.getenv("DISCORD_WEBHOOK")
+    if webhook:
+        _send_discord(webhook, action, context)
+    else:
+        LOGGER.warning("DISCORD_WEBHOOK not configured, skipping Discord notification")
 
     trade_executed, exec_message = execute_trading(broker, action, context)
 
@@ -187,7 +187,7 @@ def execute_trading(
             order_resp = broker.submit_market_order(
                 symbol=order_symbol, side="buy", notional=notional
             )
-            _attach_fill_price(context, order_resp)
+            _attach_fill_price(context, order_resp, broker_name=broker.name)
             LOGGER.info(
                 "Submitted %s LONG order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 broker_label,
@@ -211,7 +211,7 @@ def execute_trading(
                 LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close LONG position: {exc}"
                 return False, message
-            _attach_fill_price(context, order_resp)
+            _attach_fill_price(context, order_resp, broker_name=broker.name)
             LOGGER.info(
                 "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -239,7 +239,7 @@ def execute_trading(
             order_resp = broker.submit_market_order(
                 symbol=order_symbol, side="sell", notional=notional
             )
-            _attach_fill_price(context, order_resp)
+            _attach_fill_price(context, order_resp, broker_name=broker.name)
             LOGGER.info(
                 "Submitted %s SHORT order | feed_symbol=%s order_symbol=%s notional=%.2f",
                 broker_label,
@@ -263,7 +263,7 @@ def execute_trading(
                 LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
                 message = f"Failed to close SHORT position: {exc}"
                 return False, message
-            _attach_fill_price(context, order_resp)
+            _attach_fill_price(context, order_resp, broker_name=broker.name)
             LOGGER.info(
                 "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
                 broker_label,
@@ -401,10 +401,16 @@ def _is_price_within_tolerance(
     return True
 
 
-def _attach_fill_price(context: Dict[str, Any], order_resp: Dict[str, Any]) -> None:
+def _attach_fill_price(
+    context: Dict[str, Any],
+    order_resp: Dict[str, Any],
+    *,
+    broker_name: str,
+) -> None:
     """Parse broker order response to extract fill price and compute slippage."""
-    fill_price = _extract_fill_price(order_resp)
+    fill_price = _extract_fill_price(order_resp, broker_name=broker_name)
     if fill_price is None:
+        LOGGER.debug("Fill price not found in %s response: %s", broker_name, order_resp)
         return
     context["exec_fill_price"] = fill_price
     signal_price = _extract_signal_price(context)
@@ -412,19 +418,32 @@ def _attach_fill_price(context: Dict[str, Any], order_resp: Dict[str, Any]) -> N
         context["slippage_pct"] = (fill_price - signal_price) / signal_price
 
 
-def _extract_fill_price(resp: Dict[str, Any]) -> Optional[float]:
+def _extract_fill_price(resp: Dict[str, Any], *, broker_name: str) -> Optional[float]:
     """Try common fields from Alpaca / Binance USD-M order responses."""
     candidates = [
         resp.get("filled_avg_price"),
         resp.get("avg_price"),
         resp.get("avgPrice"),
         resp.get("price"),
+        resp.get("executedQty") and resp.get("cummulativeQuoteQty")  # Binance futures sometimes returns both; price = quote/qty
+        and (
+            float(resp.get("cummulativeQuoteQty"))
+            / float(resp.get("executedQty") or 1)
+            if float(resp.get("executedQty") or 0) > 0
+            else None
+        ),
     ]
     # Binance fills list
     fills = resp.get("fills") if isinstance(resp, dict) else None
     if fills and isinstance(fills, list) and fills:
         fills_price = fills[0].get("price")
         candidates.append(fills_price)
+    # Binance futures user-data stream style {"avgPrice": "..."} already covered; Alpaca fill list
+    alpaca_fills = resp.get("legs") or resp.get("order_fills")
+    if alpaca_fills and isinstance(alpaca_fills, list):
+        leg = alpaca_fills[0]
+        if isinstance(leg, dict):
+            candidates.append(leg.get("price"))
     for val in candidates:
         try:
             if val is None:

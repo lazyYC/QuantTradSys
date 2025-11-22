@@ -131,10 +131,10 @@ def generate_realtime_signal(
         elif pred_class == -2:
             target_price = price * (1.0 - expected_return)
 
+    # 訊號上下文：僅保留單一價格欄位避免重複
     context: Dict[str, object] = {
         "time_utc": str(latest["timestamp"]),
-        "closed_price": price,  # 收到的關盤價（訊號價）
-        "signal_price": price,
+        "signal_price": price,  # 最新收盤價作為訊號價
         "expected_return": expected_return,
         "predicted_class": int(pred_class),
         "target_price": target_price,
