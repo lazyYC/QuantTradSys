@@ -124,11 +124,20 @@ def generate_realtime_signal(
     price = float(latest.get("close", np.nan))
     threshold = float(model_params.decision_threshold)
 
+    target_price = None
+    if not np.isnan(price) and np.isfinite(price):
+        if pred_class == 2:
+            target_price = price * (1.0 + expected_return)
+        elif pred_class == -2:
+            target_price = price * (1.0 - expected_return)
+
     context: Dict[str, object] = {
         "time_utc": str(latest["timestamp"]),
-        "closed_price": price,
+        "closed_price": price,  # 收到的關盤價（訊號價）
+        "signal_price": price,
         "expected_return": expected_return,
         "predicted_class": int(pred_class),
+        "target_price": target_price,
     }
 
     if runtime_state.position_side:

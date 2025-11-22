@@ -115,13 +115,22 @@ def dispatch_signal(
     if action.upper() == "HOLD":
         return False
 
+    broker = get_trading_broker(env_path=env_path)
+    if broker:
+        symbol_for_price = _normalize_symbol(str(context.get("symbol", "")))
+        exec_ref_price = _get_current_price(context, symbol_for_price, broker_name=broker.name)
+        signal_price = _extract_signal_price(context)
+        if exec_ref_price is not None:
+            context["exec_ref_price"] = exec_ref_price
+        if signal_price is not None and exec_ref_price is not None and signal_price != 0:
+            context["slippage_pct"] = (exec_ref_price - signal_price) / signal_price
+
     webhook = os.getenv("DISCORD_WEBHOOK")
     if webhook:
         _send_discord(webhook, action, context)
     else:
         LOGGER.warning("DISCORD_WEBHOOK not configured, skipping Discord notification")
 
-    broker = get_trading_broker(env_path=env_path)
     if broker is None:
         LOGGER.warning("Trading broker unavailable; trading step skipped")
         if webhook:
@@ -139,7 +148,14 @@ def dispatch_signal(
     if webhook:
         status = "SUCCESS" if trade_executed else "FAILED"
         result_context = {
-            "message": f"[{action.upper()}] Execution {status}: {exec_message or 'no details'}"
+            "message": f"[{action.upper()}] Execution {status}: {exec_message or 'no details'}",
+        }
+        if "exec_ref_price" in context:
+            result_context["exec_ref_price"] = context["exec_ref_price"]
+        if "signal_price" in context:
+            result_context["signal_price"] = context["signal_price"]
+        if "slippage_pct" in context:
+            result_context["slippage_pct"] = context["slippage_pct"]
         }
         _send_discord(webhook, f"{action}_RESULT", result_context)
         LOGGER.info(f"Dispatch signal:{action} sent to Discord successfully")
@@ -157,6 +173,13 @@ def execute_trading(
     message = ""
     try:
         order_symbol = broker.format_order_symbol(symbol)
+        signal_price = _extract_signal_price(context)
+        exec_ref_price = _get_current_price(context, symbol, broker_name=broker.name)
+        if exec_ref_price is not None:
+            context["exec_ref_price"] = exec_ref_price
+        if signal_price is not None and exec_ref_price is not None and signal_price != 0:
+            slippage = (exec_ref_price - signal_price) / signal_price
+            context["slippage_pct"] = slippage
         if action_upper == "ENTER_LONG":
             notional = _resolve_order_notional(
                 broker,
@@ -304,13 +327,29 @@ def get_trading_broker(
     return None
 
 
+def _extract_signal_price(context: Dict[str, Any]) -> Optional[float]:
+    for key in ("signal_price", "closed_price", "price", "close"):
+        val = context.get(key)
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _get_current_price(
+    context: Dict[str, Any], symbol: str, *, broker_name: str
+) -> Optional[float]:
+    normalized_symbol = _normalize_ccxt_symbol(symbol)
+    current_price, _ = _fetch_ccxt_price(normalized_symbol)
+    return current_price
+
+
 def _is_price_within_tolerance(
     context: Dict[str, Any], symbol: str, *, broker_name: str
 ) -> bool:
-    signal_price = context.get("price") or context.get("close")
-    try:
-        signal_price_val = float(signal_price)
-    except (TypeError, ValueError):
+    signal_price_val = _extract_signal_price(context)
+    if signal_price_val is None:
         LOGGER.debug("Signal price missing or invalid; skipping price validation")
         return True
 
