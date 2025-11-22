@@ -447,7 +447,7 @@ def _suggest_indicator(
             "future_window", sorted(set(int(x) for x in future_window_choices))
         ),
         future_return_threshold=trial.suggest_float(
-            "future_return_threshold", 0.005, 0.015, step=0.0005
+            "future_return_threshold", 0.003, 0.015, step=0.0005
         ),
     )
 
@@ -468,6 +468,6 @@ def _suggest_model(trial: Trial) -> StarModelParams:
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
         decision_threshold=trial.suggest_float(
-            "decision_threshold", 0.0045, 0.006, step=0.0005
+            "decision_threshold", 0.004, 0.007, step=0.0001
         ),
     )
