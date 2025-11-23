@@ -446,7 +446,7 @@ def _suggest_indicator(
             "future_window", sorted(set(int(x) for x in future_window_choices))
         ),
         future_return_threshold=trial.suggest_float(
-            "future_return_threshold", 0.003, 0.015, step=0.0005
+            "future_return_threshold", 0.0, 0.0001, step=0.0001
         ),
     )
 
