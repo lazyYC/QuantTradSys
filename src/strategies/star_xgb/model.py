@@ -52,6 +52,8 @@ def train_star_model(
     min_validation_days: int = 30,
     stop_loss_pct: Optional[float] = None,
     use_gpu: bool = False,
+    seed: Optional[int] = None,
+    deterministic: bool = True,
 ) -> StarTrainingResult:
     """針對單一指標參數搜尋最佳模型。"""
     if dataset.empty:
@@ -89,7 +91,12 @@ def train_star_model(
     ) = None
 
     for model_params in model_candidates:
-        model = _init_model(model_params, device="gpu" if use_gpu else "cpu")
+        model = _init_model(
+            model_params,
+            device="gpu" if use_gpu else "cpu",
+            seed=seed,
+            deterministic=deterministic,
+        )
         fitted_model, val_probs = _fit_model(model, train_df, valid_df, feature_cols)
         val_target_df = valid_df if not valid_df.empty else train_df
         metrics = _evaluate(
@@ -481,8 +488,13 @@ def _split_train_valid(
 
 
 def _init_model(
-    params: StarModelParams, *, device: str = "cpu"
+    params: StarModelParams,
+    *,
+    device: str = "cpu",
+    seed: Optional[int] = None,
+    deterministic: bool = True,
 ) -> lgb.LGBMClassifier:
+    seed_val = 42 if seed is None else seed
     return lgb.LGBMClassifier(
         objective="multiclass",
         boosting_type="gbdt",
@@ -500,10 +512,10 @@ def _init_model(
         num_class=NUM_CLASSES,
         n_jobs=-1,
         verbosity=-1,
-        random_state=42,
-        bagging_seed=42,
-        feature_fraction_seed=42,
-        deterministic=True,
+        random_state=seed_val,
+        bagging_seed=seed_val,
+        feature_fraction_seed=seed_val,
+        deterministic=deterministic,
         device=device,
     )
 

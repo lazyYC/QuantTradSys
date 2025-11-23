@@ -1,4 +1,4 @@
-"""使用 Optuna 對 star_xgb 策略進行超參數搜尋、訓練、回測與儲存。"""
+"""雿輻�� Optuna 撠?star_xgb 蝑����?脰?頞��??豢?撠�����?蝺氬���?皜祈??脣???""
 
 from __future__ import annotations
 
@@ -74,10 +74,13 @@ def optimize_star_xgb(
     stop_loss_pct: float = 0.005,
     future_window_choices: Optional[Sequence[int]] = None,
     use_gpu: bool = False,
+    seeds: Optional[Sequence[int]] = None,
 ) -> StarOptunaResult:
     symbol = canonicalize_symbol(symbol)
     if future_window_choices is None:
         future_window_choices = [5]
+    if seeds is None:
+        seeds = [42, 52, 62, 72, 82]
     sampler = optuna.samplers.TPESampler(seed=42, multivariate=True, group=True)
     study = optuna.create_study(
         study_name=study_name,
@@ -98,9 +101,9 @@ def optimize_star_xgb(
     cleaned = prepare_ohlcv_frame(raw_df, timeframe)
     train_df, test_df = split_train_test(cleaned, test_days=test_days)
     if train_df.empty:
-        raise ValueError("train set 為空，請檢查資料來源")
+        raise ValueError("train set ?箇征嚗��?瑼Ｘ�亥���?靘��?")
     if test_df.empty:
-        raise ValueError("test set 為空，請檢查資料來源")
+        raise ValueError("test set ?箇征嚗��?瑼Ｘ�亥���?靘��?")
 
     def _objective(trial: Trial) -> float:
         indicator_params = _suggest_indicator(trial, future_window_choices)
@@ -124,7 +127,7 @@ def optimize_star_xgb(
         )
 
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
-            raise optuna.TrialPruned("資料集為空或只有單一類別")
+            raise optuna.TrialPruned("鞈��??���箇征�??芣??桐?憿����")
 
         def _checkpoint_progress(
             fraction: float, step: int, *, allow_prune: bool
@@ -141,13 +144,15 @@ def optimize_star_xgb(
                         partial_ds,
                         indicator_params,
                         [model_params],
-                    model_dir=Path(tmpdir_ckpt),
-                    valid_days=MIN_VALIDATION_DAYS,
-                    transaction_cost=transaction_cost,
-                    min_validation_days=MIN_VALIDATION_DAYS,
-                    stop_loss_pct=stop_loss_pct,
-                    use_gpu=use_gpu,
-                )
+                        model_dir=Path(tmpdir_ckpt),
+                        valid_days=MIN_VALIDATION_DAYS,
+                        transaction_cost=transaction_cost,
+                        min_validation_days=MIN_VALIDATION_DAYS,
+                        stop_loss_pct=stop_loss_pct,
+                        use_gpu=use_gpu,
+                        seed=seeds[0],
+                        deterministic=True,
+                    )
                     metric_value = ckpt_result.validation_metrics.get(
                         "total_return", 0.0
                     )
@@ -157,29 +162,51 @@ def optimize_star_xgb(
             if allow_prune and trial.should_prune():
                 raise optuna.TrialPruned(f"Pruned at {int(fraction*100)}% data")
 
-        _checkpoint_progress(0.5, step=1, allow_prune=False)
-        _checkpoint_progress(0.9, step=2, allow_prune=True)
+        _checkpoint_progress(0.3, step=1, allow_prune=False)
+        _checkpoint_progress(0.6, step=2, allow_prune=True)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            try:
-                result = train_star_model(
-                    dataset,
-                    indicator_params,
-                    [model_params],
-                    model_dir=Path(tmpdir),
-                    valid_days=MIN_VALIDATION_DAYS,
-                    transaction_cost=transaction_cost,
-                    min_validation_days=MIN_VALIDATION_DAYS,
-                    stop_loss_pct=stop_loss_pct,
-                    use_gpu=use_gpu,
-                )
-            except ValueError as exc:
-                raise optuna.TrialPruned(str(exc)) from exc
+        seed_scores: list[float] = []
+        best_seed_result: StarTrainingResult | None = None
+        best_seed: int | None = None
 
-        score = float(result.validation_metrics.get("total_return", 0.0))
+        for seed_val in seeds:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                try:
+                    result = train_star_model(
+                        dataset,
+                        indicator_params,
+                        [model_params],
+                        model_dir=Path(tmpdir),
+                        valid_days=MIN_VALIDATION_DAYS,
+                        transaction_cost=transaction_cost,
+                        min_validation_days=MIN_VALIDATION_DAYS,
+                        stop_loss_pct=stop_loss_pct,
+                        use_gpu=use_gpu,
+                        seed=seed_val,
+                        deterministic=True,
+                    )
+                except ValueError as exc:
+                    raise optuna.TrialPruned(str(exc)) from exc
+
+            val_score = float(result.validation_metrics.get("total_return", 0.0))
+            seed_scores.append(val_score)
+            if best_seed_result is None or val_score > float(
+                best_seed_result.validation_metrics.get("total_return", -1e9)
+            ):
+                best_seed_result = result
+                best_seed = seed_val
+
+        if not seed_scores:
+            raise optuna.TrialPruned("no seed scores computed")
+
+        score = float(sum(seed_scores) / len(seed_scores))
         trial.set_user_attr("indicator_params", indicator_params.as_dict())
         trial.set_user_attr("model_params", model_params.as_dict())
-        trial.set_user_attr("validation_metrics", result.validation_metrics)
+        trial.set_user_attr(
+            "best_seed_validation_metrics",
+            best_seed_result.validation_metrics if best_seed_result else {},
+        )
+        trial.set_user_attr("best_seed", best_seed)
         return score
 
     study.optimize(_objective, n_trials=n_trials, timeout=timeout)
@@ -188,7 +215,7 @@ def optimize_star_xgb(
     best_indicator = StarIndicatorParams(**best_trial.user_attrs["indicator_params"])
     best_model_params = StarModelParams(**best_trial.user_attrs["model_params"])
 
-    # 使用最佳參數重新訓練完整模型並執行回測
+    # 雿輻��?�雿喳??賊??啗?蝺游??湔芋?�銝�?瑁??�皜�
     train_cache = StarFeatureCache(
         train_df,
         trend_windows=[best_indicator.trend_window],
@@ -206,16 +233,20 @@ def optimize_star_xgb(
         min_abs_future_return=best_indicator.future_return_threshold,
     )
 
+    best_seed = best_trial.user_attrs.get("best_seed", seeds[0])
+    
     training_result = train_star_model(
         train_dataset,
         best_indicator,
         [best_model_params],
         model_dir=model_dir,
-        valid_days=0,  # 使用全部訓練資料
+        valid_days=0,
         transaction_cost=transaction_cost,
         min_validation_days=MIN_VALIDATION_DAYS,
         stop_loss_pct=stop_loss_pct,
         use_gpu=use_gpu,
+        seed=best_seed,
+        deterministic=True,
     )
 
     inner_validation_days = max(
@@ -316,7 +347,7 @@ def optimize_star_xgb(
         stop_loss_pct=stop_loss_pct,
     )
 
-    # 儲存結果
+    # ?脣?蝯��?
     if _should_persist_results(study, result_guard_dir):
         run_id = datetime.now(timezone.utc).isoformat()
         strategy_key = study.study_name or "star_xgb_default"
@@ -470,3 +501,4 @@ def _suggest_model(trial: Trial) -> StarModelParams:
             "decision_threshold", 0.004, 0.007, step=0.0001
         ),
     )
+
