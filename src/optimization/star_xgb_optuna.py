@@ -1,5 +1,3 @@
-"""雿輻�� Optuna 撠?star_xgb 蝑����?脰?頞��??豢?撠�����?蝺氬���?皜祈??脣???""
-
 from __future__ import annotations
 
 import logging
@@ -128,42 +126,6 @@ def optimize_star_xgb(
 
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
             raise optuna.TrialPruned("鞈��??���箇征�??芣??桐?憿����")
-
-        def _checkpoint_progress(
-            fraction: float, step: int, *, allow_prune: bool
-        ) -> None:
-            cutoff = int(len(dataset) * fraction)
-            if cutoff < 200:
-                return
-            partial_ds = dataset.iloc[:cutoff].reset_index(drop=True)
-            if partial_ds[TARGET_COLUMN].nunique() < 2:
-                return
-            with tempfile.TemporaryDirectory() as tmpdir_ckpt:
-                try:
-                    ckpt_result = train_star_model(
-                        partial_ds,
-                        indicator_params,
-                        [model_params],
-                        model_dir=Path(tmpdir_ckpt),
-                        valid_days=MIN_VALIDATION_DAYS,
-                        transaction_cost=transaction_cost,
-                        min_validation_days=MIN_VALIDATION_DAYS,
-                        stop_loss_pct=stop_loss_pct,
-                        use_gpu=use_gpu,
-                        seed=seeds[0],
-                        deterministic=True,
-                    )
-                    metric_value = ckpt_result.validation_metrics.get(
-                        "total_return", 0.0
-                    )
-                except Exception:
-                    return
-            trial.report(metric_value, step=step)
-            if allow_prune and trial.should_prune():
-                raise optuna.TrialPruned(f"Pruned at {int(fraction*100)}% data")
-
-        _checkpoint_progress(0.3, step=1, allow_prune=False)
-        _checkpoint_progress(0.6, step=2, allow_prune=True)
 
         seed_scores: list[float] = []
         best_seed_result: StarTrainingResult | None = None
