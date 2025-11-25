@@ -78,8 +78,8 @@ def optimize_star_xgb(
     if future_window_choices is None:
         future_window_choices = [5]
     if seeds is None:
-        seeds = [42, 52, 62, 72, 82]
-    sampler = optuna.samplers.TPESampler(seed=42, multivariate=True, group=True)
+        seeds = [88, 188, 288]
+    sampler = optuna.samplers.TPESampler(seed=88, multivariate=True, group=True)
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
@@ -197,6 +197,8 @@ def optimize_star_xgb(
 
     best_seed = best_trial.user_attrs.get("best_seed", seeds[0])
     
+    best_seed = best_trial.user_attrs.get("best_seed", seeds[0])
+
     training_result = train_star_model(
         train_dataset,
         best_indicator,
@@ -463,4 +465,3 @@ def _suggest_model(trial: Trial) -> StarModelParams:
             "decision_threshold", 0.004, 0.007, step=0.0001
         ),
     )
-

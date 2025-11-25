@@ -494,7 +494,7 @@ def _init_model(
     seed: Optional[int] = None,
     deterministic: bool = True,
 ) -> lgb.LGBMClassifier:
-    seed_val = 42 if seed is None else seed
+    seed_val = 88 if seed is None else seed
     return lgb.LGBMClassifier(
         objective="multiclass",
         boosting_type="gbdt",
