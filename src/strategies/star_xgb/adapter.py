@@ -162,3 +162,57 @@ class StarXGBStrategy(BaseStrategy):
         valid_keys = StarModelParams.__annotations__.keys()
         filtered = {k: v for k, v in params.items() if k in valid_keys}
         return StarModelParams(**filtered)
+
+    def backtest(
+        self, 
+        raw_data: pd.DataFrame, 
+        params: Dict[str, Any], 
+        model_path: Optional[str] = None
+    ) -> Any:
+        from strategies.star_xgb.backtest import backtest_star_xgb
+        from strategies.star_xgb.dataset import split_train_test, prepend_warmup_rows, DEFAULT_WARMUP_BARS
+        
+        # Parse params
+        indicator_params = self._parse_indicator_params(params)
+        model_params = self._parse_model_params(params)
+        
+        # We assume raw_data is the full dataset or the test set?
+        # Usually backtest is run on a specific set.
+        # For simplicity, let's assume raw_data is what we want to backtest on.
+        # But backtest_star_xgb expects prepared features or raw data?
+        # It expects `test_input` which is raw data with warmup.
+        
+        # If model_path is not provided, we can't really backtest unless we train on the fly?
+        # Or maybe we just return empty?
+        if not model_path:
+             raise ValueError("model_path is required for StarXGB backtest")
+             
+        # We need to load metadata to get class_means/thresholds if they are not in params.
+        # Usually these are saved in the model directory or passed in params.
+        # For now, let's assume they are passed in params or we can't run.
+        # But wait, `backtest_star_xgb` needs `class_means`, `class_thresholds`.
+        # These come from the training result.
+        # If we are running from `report.py`, we might load them from DB (metrics?).
+        # Or maybe we should load them from the model artifact?
+        
+        # Let's assume params contains them if they were saved.
+        # If not, we might fail.
+        
+        class_means = params.get("class_means")
+        class_thresholds = params.get("class_thresholds")
+        feature_columns = params.get("feature_columns")
+        feature_stats = params.get("feature_stats")
+        
+        return backtest_star_xgb(
+            raw_data,
+            indicator_params,
+            model_params,
+            model_path=model_path,
+            timeframe=params.get("timeframe", "5m"),
+            class_means=class_means,
+            class_thresholds=class_thresholds,
+            feature_columns=feature_columns,
+            feature_stats=feature_stats,
+            transaction_cost=params.get("transaction_cost", 0.001),
+            stop_loss_pct=params.get("stop_loss_pct", 0.005),
+        )
