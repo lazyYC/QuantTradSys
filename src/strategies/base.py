@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional, Tuple
+
+import optuna
+import pandas as pd
+
+
+class BaseStrategy(ABC):
+    """
+    Abstract base class for trading strategies.
+    All strategies (XGBoost, Deep Learning, etc.) must implement this interface.
+    """
+
+    @abstractmethod
+    def build_features(
+        self, raw_data: pd.DataFrame, params: Dict[str, Any]
+    ) -> pd.DataFrame:
+        """
+        Construct features from raw OHLCV data.
+
+        Args:
+            raw_data: DataFrame containing 'timestamp', 'open', 'high', 'low', 'close', 'volume'.
+            params: Dictionary of parameters for feature engineering (e.g., window sizes).
+
+        Returns:
+            DataFrame with calculated features.
+        """
+        pass
+
+    @abstractmethod
+    def train(
+        self,
+        train_data: pd.DataFrame,
+        valid_data: Optional[pd.DataFrame],
+        params: Dict[str, Any],
+        model_dir: str,
+        seed: int,
+    ) -> Any:
+        """
+        Train the model.
+
+        Args:
+            train_data: Training dataset (features + labels).
+            valid_data: Validation dataset (optional).
+            params: Dictionary of model hyperparameters.
+            model_dir: Directory to save model artifacts.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            The trained model object (or a result object containing the model).
+        """
+        pass
+
+    @abstractmethod
+    def get_optuna_params(self, trial: optuna.Trial) -> Dict[str, Any]:
+        """
+        Define the hyperparameter search space for Optuna.
+
+        Args:
+            trial: The current Optuna trial.
+
+        Returns:
+            A dictionary of suggested parameters for this trial.
+        """
+        pass
+
+    @abstractmethod
+    def warm_up(self, raw_data: pd.DataFrame) -> None:
+        """
+        Pre-calculate expensive features or initialize caches.
+        This is called once before the optimization loop.
+        
+        Args:
+            raw_data: The raw OHLCV data.
+        """
+        pass
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional, Tuple
+
+import optuna
+import pandas as pd
+
+
+class BaseStrategy(ABC):
+    """
+    Abstract base class for trading strategies.
+    All strategies (XGBoost, Deep Learning, etc.) must implement this interface.
+    """
+
+    @abstractmethod
+    def build_features(
+        self, raw_data: pd.DataFrame, params: Dict[str, Any]
+    ) -> pd.DataFrame:
+        """
+        Construct features from raw OHLCV data.
+
+        Args:
+            raw_data: DataFrame containing 'timestamp', 'open', 'high', 'low', 'close', 'volume'.
+            params: Dictionary of parameters for feature engineering (e.g., window sizes).
+
+        Returns:
+            DataFrame with calculated features.
+        """
+        pass
+
+    @abstractmethod
+    def train(
+        self,
+        train_data: pd.DataFrame,
+        valid_data: Optional[pd.DataFrame],
+        params: Dict[str, Any],
+        model_dir: str,
+        seed: int,
+    ) -> Any:
+        """
+        Train the model.
+
+        Args:
+            train_data: Training dataset (features + labels).
+            valid_data: Validation dataset (optional).
+            params: Dictionary of model hyperparameters.
+            model_dir: Directory to save model artifacts.
+            seed: Random seed for reproducibility.
+
+        Returns:
+            The trained model object (or a result object containing the model).
+        """
+        pass
+
+    @abstractmethod
+    def get_optuna_params(self, trial: optuna.Trial) -> Dict[str, Any]:
+        """
+        Define the hyperparameter search space for Optuna.
+
+        Args:
+            trial: The current Optuna trial.
+
+        Returns:
+            A dictionary of suggested parameters for this trial.
+        """
+        pass
+
+    @abstractmethod
+    def warm_up(self, raw_data: pd.DataFrame) -> None:
+        """
+        Pre-calculate expensive features or initialize caches.
+        This is called once before the optimization loop.
+        
+        Args:
+            raw_data: The raw OHLCV data.
+        """
+        pass
+
+    @abstractmethod
+    def prepare_data(
+        self, raw_data: pd.DataFrame, params: Dict[str, Any]
+    ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """
+        Prepare data for training (feature engineering, labeling, splitting).
+        
+        Args:
+            raw_data: The raw OHLCV data.
+            params: Configuration parameters (including indicator params).
+            
+        Returns:
+            Tuple of (prepared_dataset, metadata).
+            metadata can contain things like feature_columns, class_means, etc.
+        """
+        pass
+
+    @abstractmethod
+    def backtest(
+        self, 
+        raw_data: pd.DataFrame, 
+        params: Dict[str, Any], 
+        model_path: Optional[str] = None
+    ) -> Any:
+        """
+        Run backtest using the provided parameters and optional model.
+        
+        Args:
+            raw_data: The raw OHLCV data.
+            params: Strategy parameters.
+            model_path: Path to the trained model (if applicable).
+            
+        Returns:
+            A result object containing trades, metrics, and equity curve.
+        """
+        pass
