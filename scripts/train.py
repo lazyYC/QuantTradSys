@@ -143,6 +143,7 @@ def main() -> None:
         save_strategy_params(
             args.store_path,
             strategy=args.strategy,
+            study=args.study_name,
             symbol=args.symbol,
             timeframe=args.timeframe,
             params=study.best_params,
@@ -170,39 +171,69 @@ def main() -> None:
         if hasattr(result, "class_thresholds"):
             best_params["class_thresholds"] = result.class_thresholds
             
-        bt_result = strategy.backtest(
-            raw_data=cleaned_df,
-            params=best_params,
-            model_path=model_path_str
-        )
+        # Run Backtest on Test Set (or specific split if we had logic for it)
+        # For now we run on the whole cleaned_df but we should ideally split it or use the result's test set
+        # But BaseStrategy.backtest typically runs on whatever data is passed.
         
-        if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:
-            save_trades(
-                args.store_path,
-                strategy=args.strategy,
-                dataset="test",
-                symbol=args.symbol,
-                timeframe=args.timeframe,
-                trades=bt_result.trades,
-                metrics=format_metrics(bt_result.metrics),
-                run_id=run_id,
+        # TODO: If we want strict train/valid/test separation in DB, we should split cleaned_df here
+        # based on args.test_days and save them as separate datasets.
+        
+        # Split data for recording
+        # from strategies.data_utils import split_train_test # Unused
+        
+        # Let's do a simple time-based split for recording
+        test_days = args.test_days
+        cutoff_date = cleaned_df["timestamp"].max() - pd.Timedelta(days=test_days)
+        
+        train_df = cleaned_df[cleaned_df["timestamp"] <= cutoff_date]
+        test_df = cleaned_df[cleaned_df["timestamp"] > cutoff_date]
+        
+        datasets_to_run = [
+            ("train", train_df),
+            ("test", test_df),
+            ("all", cleaned_df)
+        ]
+        
+        for ds_name, ds_data in datasets_to_run:
+            if ds_data.empty:
+                continue
+                
+            bt_result = strategy.backtest(
+                raw_data=ds_data,
+                params=best_params,
+                model_path=model_path_str
             )
             
-            # Prune old trades
-            prune_strategy_trades(
-                args.store_path,
-                strategy=args.strategy,
-                symbol=args.symbol,
-                timeframe=args.timeframe,
-                keep_run_id=run_id,
-            )
-            prune_strategy_metrics(
-                args.store_path,
-                strategy=args.strategy,
-                symbol=args.symbol,
-                timeframe=args.timeframe,
-                keep_run_id=run_id,
-            )
+            if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:
+                save_trades(
+                    args.store_path,
+                    strategy=args.strategy,
+                    study=args.study_name,
+                    dataset=ds_name,
+                    symbol=args.symbol,
+                    timeframe=args.timeframe,
+                    trades=bt_result.trades,
+                    metrics=format_metrics(bt_result.metrics),
+                    run_id=run_id,
+                )
+        
+        # Prune old trades (only for this study)
+        prune_strategy_trades(
+            args.store_path,
+            strategy=args.strategy,
+            study=args.study_name,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            keep_run_id=run_id,
+        )
+        prune_strategy_metrics(
+            args.store_path,
+            strategy=args.strategy,
+            study=args.study_name,
+            symbol=args.symbol,
+            timeframe=args.timeframe,
+            keep_run_id=run_id,
+        )
             
         LOGGER.info(f"Results saved to {args.store_path}")
 

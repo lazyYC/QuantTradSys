@@ -59,9 +59,19 @@ def main() -> None:
         sys.exit(1)
 
     # 3. Load Params & Previous Results
+    # If study is not provided, we might want to load the latest or all?
+    # For now, let's assume if study is NOT provided, we load the one with empty study string or handle it.
+    # But wait, we added 'study' to PK. So we MUST provide it to load a specific record.
+    # Or we change load_strategy_params to return a list?
+    # Let's enforce --study for now if the DB has it.
+    # But for backward compatibility?
+    # Let's use a default study name "strategy_optimization" if not provided, matching train.py default.
+    study_name = args.study if args.study else "strategy_optimization"
+    
     params_record = load_strategy_params(
         args.store_path,
         strategy=args.strategy,
+        study=study_name,
         symbol=args.symbol,
         timeframe=args.timeframe,
     )
@@ -72,6 +82,7 @@ def main() -> None:
     trades_df = load_trades(
         args.store_path,
         strategy=args.strategy,
+        study=study_name,
         symbol=args.symbol,
         timeframe=args.timeframe,
     )
@@ -79,6 +90,7 @@ def main() -> None:
     metrics_df = load_metrics(
         args.store_path,
         strategy=args.strategy,
+        study=study_name,
         symbol=args.symbol,
         timeframe=args.timeframe,
     )
@@ -86,7 +98,7 @@ def main() -> None:
     if args.rerun or trades_df.empty:
         LOGGER.info("Running backtest...")
         if not params:
-            LOGGER.error("No parameters found for backtest. Please train first.")
+            LOGGER.error(f"No parameters found for study '{study_name}'. Please train first.")
             sys.exit(1)
             
         # Run backtest via Strategy Interface
@@ -109,7 +121,7 @@ def main() -> None:
     figures = _collect_figures(candles, trades_df, equity_df, metrics_df, params)
     
     output_path = Path(args.output)
-    _write_html(figures, output_path, title=args.title or f"Report: {args.strategy}")
+    _write_html(figures, output_path, title=args.title or f"Report: {args.strategy} ({study_name})")
     LOGGER.info(f"Report saved to {output_path}")
 
 
@@ -190,9 +202,10 @@ def _write_html(figures, output_path, title):
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate Strategy Report")
     parser.add_argument("--strategy", required=True)
+    parser.add_argument("--study", help="Study name (experiment ID)")
     parser.add_argument("--symbol", default="BTC/USDT:USDT")
     parser.add_argument("--timeframe", default="5m")
-    parser.add_argument("--store-path", default="storage/strategy_state.db")
+    parser.add_argument("--store-path", type=Path, default=Path("storage/strategy_state.db"))
     parser.add_argument("--ohlcv-db", default="storage/market_data.db")
     parser.add_argument("--output", default="reports/report.html")
     parser.add_argument("--title", help="Report Title")

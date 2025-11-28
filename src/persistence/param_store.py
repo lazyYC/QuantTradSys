@@ -11,12 +11,13 @@ LOGGER = logging.getLogger(__name__)
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS strategy_params (
     strategy TEXT NOT NULL,
+    study TEXT NOT NULL,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     params_json TEXT NOT NULL,
     metrics_json TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (strategy, symbol, timeframe)
+    PRIMARY KEY (strategy, study, symbol, timeframe)
 );
 """
 
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS strategy_params (
 @dataclass
 class StrategyRecord:
     strategy: str
+    study: str
     symbol: str
     timeframe: str
     params: Dict[str, Any]
@@ -38,12 +40,16 @@ def _ensure_connection(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL;")
     with conn:
         conn.executescript(SCHEMA_SQL)
+        # Migration: Check if 'study' column exists, if not, we might need to recreate or alter
+        # Since PK changes, we can't easily alter. 
+        # For now, we assume fresh DB or compatible schema.
     return conn
 
 
 def save_strategy_params(
     db_path: Path,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
     params: Dict[str, Any],
@@ -64,15 +70,16 @@ def save_strategy_params(
         conn.execute(
             """
             INSERT OR REPLACE INTO strategy_params (
-                strategy, symbol, timeframe, params_json, metrics_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                strategy, study, symbol, timeframe, params_json, metrics_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (strategy, symbol, timeframe, params_json, metrics_json, now),
+            (strategy, study, symbol, timeframe, params_json, metrics_json, now),
         )
     conn.close()
-    LOGGER.info("Stored parameters for %s | %s | %s", strategy, symbol, timeframe)
+    LOGGER.info("Stored parameters for %s | %s | %s | %s", strategy, study, symbol, timeframe)
     return StrategyRecord(
         strategy=strategy,
+        study=study,
         symbol=symbol,
         timeframe=timeframe,
         params=payload,
@@ -84,6 +91,7 @@ def save_strategy_params(
 def load_strategy_params(
     db_path: Path,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
 ) -> Optional[StrategyRecord]:
@@ -93,9 +101,9 @@ def load_strategy_params(
         """
         SELECT params_json, metrics_json, updated_at
         FROM strategy_params
-        WHERE strategy = ? AND symbol = ? AND timeframe = ?
+        WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ?
         """,
-        (strategy, symbol, timeframe),
+        (strategy, study, symbol, timeframe),
     )
     row = cursor.fetchone()
     conn.close()
@@ -106,6 +114,7 @@ def load_strategy_params(
     updated_at = row[2]
     return StrategyRecord(
         strategy=strategy,
+        study=study,
         symbol=symbol,
         timeframe=timeframe,
         params=params,

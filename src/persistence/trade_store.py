@@ -31,6 +31,7 @@ def load_trades(
     db_path: Path,
     # *,
     strategy: str,
+    study: Optional[str] = None,
     dataset: Optional[str] = None,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
@@ -40,6 +41,9 @@ def load_trades(
     conn = _ensure_connection(db_path)
     filters = ["strategy = ?"]
     params: list[object] = [strategy]
+    if study:
+        filters.append("study = ?")
+        params.append(study)
     if dataset:
         filters.append("dataset = ?")
         params.append(dataset)
@@ -67,6 +71,7 @@ def load_trades(
 def load_metrics(
     db_path: Path,
     strategy: str,
+    study: Optional[str] = None,
     dataset: Optional[str] = None,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
@@ -76,6 +81,9 @@ def load_metrics(
     conn = _ensure_connection(db_path)
     filters = ["strategy = ?"]
     params: list[object] = [strategy]
+    if study:
+        filters.append("study = ?")
+        params.append(study)
     if dataset:
         filters.append("dataset = ?")
         params.append(dataset)
@@ -104,6 +112,7 @@ TRADE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS strategy_trades (
     run_id TEXT NOT NULL,
     strategy TEXT NOT NULL,
+    study TEXT NOT NULL,
     dataset TEXT NOT NULL,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
@@ -126,6 +135,7 @@ METRIC_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS strategy_metrics (
     run_id TEXT NOT NULL,
     strategy TEXT NOT NULL,
+    study TEXT NOT NULL,
     dataset TEXT NOT NULL,
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
@@ -138,7 +148,7 @@ CREATE TABLE IF NOT EXISTS strategy_metrics (
     period_start TEXT,
     period_end TEXT,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, strategy, dataset, symbol, timeframe)
+    PRIMARY KEY (run_id, strategy, study, dataset, symbol, timeframe)
 );
 """
 
@@ -168,6 +178,7 @@ def save_trades(
     db_path: Path,
     *,
     strategy: str,
+    study: str,
     dataset: str,
     symbol: str,
     timeframe: str,
@@ -184,6 +195,7 @@ def save_trades(
                 (
                     run_identifier,
                     strategy,
+                    study,
                     dataset,
                     symbol,
                     timeframe,
@@ -203,24 +215,25 @@ def save_trades(
             conn.executemany(
                 """
                 INSERT OR REPLACE INTO strategy_trades (
-                    run_id, strategy, dataset, symbol, timeframe,
+                    run_id, strategy, study, dataset, symbol, timeframe,
                     entry_time, exit_time, side, entry_price, exit_price,
                     return, holding_mins, entry_zscore, exit_zscore, exit_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 records,
             )
         conn.execute(
             """
             INSERT OR REPLACE INTO strategy_metrics (
-                run_id, strategy, dataset, symbol, timeframe,
+                run_id, strategy, study, dataset, symbol, timeframe,
                 annualized_return, total_return, sharpe, max_drawdown,
                 win_rate, trades, period_start, period_end, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_identifier,
                 strategy,
+                study,
                 dataset,
                 symbol,
                 timeframe,
@@ -237,9 +250,10 @@ def save_trades(
         )
     conn.close()
     LOGGER.info(
-        "Stored %s trades for %s (%s) run=%s",
+        "Stored %s trades for %s | %s (%s) run=%s",
         len(trades),
         strategy,
+        study,
         dataset,
         run_identifier,
     )
@@ -250,6 +264,7 @@ def prune_strategy_trades(
     db_path: Path,
     *,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
     keep_run_id: str,
@@ -260,14 +275,14 @@ def prune_strategy_trades(
         cursor = conn.execute(
             """
             DELETE FROM strategy_trades
-            WHERE strategy = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
+            WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
             """,
-            (strategy, symbol, timeframe, keep_run_id),
+            (strategy, study, symbol, timeframe, keep_run_id),
         )
     conn.close()
     removed = cursor.rowcount or 0
     if removed:
-        LOGGER.info("Pruned %s trades for %s | %s", removed, strategy, timeframe)
+        LOGGER.info("Pruned %s trades for %s | %s | %s", removed, strategy, study, timeframe)
     return removed
 
 
@@ -275,6 +290,7 @@ def prune_strategy_metrics(
     db_path: Path,
     *,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
     keep_run_id: str,
@@ -285,14 +301,14 @@ def prune_strategy_metrics(
         cursor = conn.execute(
             """
             DELETE FROM strategy_metrics
-            WHERE strategy = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
+            WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
             """,
-            (strategy, symbol, timeframe, keep_run_id),
+            (strategy, study, symbol, timeframe, keep_run_id),
         )
     conn.close()
     removed = cursor.rowcount or 0
     if removed:
-        LOGGER.info("Pruned %s metrics rows for %s | %s", removed, strategy, timeframe)
+        LOGGER.info("Pruned %s metrics rows for %s | %s | %s", removed, strategy, study, timeframe)
     return removed
 
 
