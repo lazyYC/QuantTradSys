@@ -160,6 +160,16 @@ def main() -> None:
         if hasattr(result, "model_path"):
             model_path_str = str(result.model_path)
             
+        # Inject training artifacts into params for backtest
+        if hasattr(result, "feature_stats"):
+            best_params["feature_stats"] = result.feature_stats
+        if hasattr(result, "feature_columns"):
+            best_params["feature_columns"] = result.feature_columns
+        if hasattr(result, "class_means"):
+            best_params["class_means"] = result.class_means
+        if hasattr(result, "class_thresholds"):
+            best_params["class_thresholds"] = result.class_thresholds
+            
         bt_result = strategy.backtest(
             raw_data=cleaned_df,
             params=best_params,
