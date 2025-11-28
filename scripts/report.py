@@ -20,11 +20,10 @@ if str(SRC_DIR) not in sys.path:
 from persistence.param_store import load_strategy_params
 from persistence.trade_store import load_metrics, load_trades
 from strategies.base import BaseStrategy
-from strategies.star_xgb.adapter import StarXGBStrategy
+from strategies.loader import load_strategy_class
 from utils.symbols import canonicalize_symbol
 
 # Import reporting utilities (reusing existing ones for now)
-# We might need to refactor these to be more generic if they are star_xgb specific
 from reporting.tables import (
     create_metrics_table,
     create_params_table,
@@ -33,10 +32,7 @@ from reporting.tables import (
 )
 from reporting.plotting import build_candlestick_figure, build_trade_overview_figure
 
-# Strategy Registry
-STRATEGIES: Dict[str, type[BaseStrategy]] = {
-    "star_xgb": StarXGBStrategy,
-}
+# STRATEGIES dict is removed
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
@@ -45,19 +41,12 @@ LOGGER = logging.getLogger(__name__)
 def main() -> None:
     args = parse_args()
     
-    # 1. Load Strategy Class
-    if args.strategy not in STRATEGIES:
-        # Try to infer from args.strategy name (e.g. star_xgb_default -> star_xgb)
-        # But for now require exact match or mapping
-        # Let's assume the user passes the key in STRATEGIES
-        # If args.strategy is "star_xgb_default", we might need to map it.
-        # For now, let's just use "star_xgb" as the key.
-        if "star_xgb" in args.strategy:
-             strategy_class = STRATEGIES["star_xgb"]
-        else:
-             raise ValueError(f"Unknown strategy: {args.strategy}")
-    else:
-        strategy_class = STRATEGIES[args.strategy]
+    # 1. Load Strategy Class (Dynamic)
+    try:
+        strategy_class = load_strategy_class(args.strategy)
+    except ValueError as e:
+        LOGGER.error(e)
+        sys.exit(1)
         
     strategy = strategy_class()
 

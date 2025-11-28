@@ -8,6 +8,10 @@ import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, Type
+from datetime import datetime
+import tempfile
+
+import pandas as pd
 
 # Add src to path
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -19,7 +23,7 @@ from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from optimization.engine import optimize_strategy
 from strategies.base import BaseStrategy
 from strategies.data_utils import prepare_ohlcv_frame
-from strategies.star_xgb.adapter import StarXGBStrategy
+from strategies.loader import load_strategy_class
 from utils.symbols import canonicalize_symbol
 
 logging.basicConfig(
@@ -27,10 +31,7 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-STRATEGIES: Dict[str, Type[BaseStrategy]] = {
-    "star_xgb": StarXGBStrategy,
-}
-
+# STRATEGIES dict is removed
 
 def main() -> None:
     args = _parse_args()
@@ -51,11 +52,13 @@ def main() -> None:
         LOGGER.error("Data is empty! Check symbol or fetcher.")
         return
     
-    # 2. Select Strategy
-    if args.strategy not in STRATEGIES:
-        raise ValueError(f"Unknown strategy: {args.strategy}. Available: {list(STRATEGIES.keys())}")
-    
-    strategy_class = STRATEGIES[args.strategy]
+    # 2. Select Strategy (Dynamic)
+    try:
+        strategy_class = load_strategy_class(args.strategy)
+    except ValueError as e:
+        LOGGER.error(e)
+        return
+        
     strategy = strategy_class()
     
     # 3. Warm Up (Initialize Caches)
@@ -63,37 +66,18 @@ def main() -> None:
     strategy.warm_up(cleaned_df)
     
     # 4. Define Fixed Configuration (The "Target")
-    # These parameters are NOT optimized by Optuna to ensure stability.
     config = {
         "future_window": args.future_window,
         "future_return_threshold": args.future_return_threshold,
-        # Pass other fixed args that might be needed by specific strategies
-        "valid_days": args.test_days, # Use test_days as validation split for internal training
+        "valid_days": args.test_days,
         "transaction_cost": 0.001,
         "stop_loss_pct": 0.005,
         "use_gpu": args.use_gpu,
-        # Pass storage paths for persistence (engine can pass them to strategy if needed, 
-        # or we can handle persistence here if engine returned the best model)
-        # But engine runs the loop.
     }
     
     LOGGER.info(f"Starting optimization for {args.strategy} with fixed target: future_window={args.future_window}")
     
     # 5. Run Optimization
-    # Note: We pass the *instance* now? No, engine expects class. 
-    # But we warmed up an instance.
-    # Refactor engine to accept instance? 
-    # Or engine instantiates? 
-    # Engine currently does `strategy = strategy_class()`.
-    # We should change engine to accept an instance or class.
-    # Let's change engine to accept `strategy_instance`.
-    
-    # Wait, I need to modify engine.py first to accept instance.
-    # Or I can just rely on the fact that StarFeatureCache might be global or I pass the warmed up instance.
-    
-    # Let's modify engine.py to accept `strategy` (instance) instead of `strategy_class`.
-    # This is better dependency injection.
-    
     study = optimize_strategy(
         strategy=strategy,
         raw_data=cleaned_df,
@@ -120,10 +104,6 @@ def main() -> None:
     # Merge best params with fixed config
     best_params = {**config, **study.best_params}
     
-    # Re-train (or just backtest) to get artifacts
-    # We need to use the strategy to generate the full result object
-    # Note: We use a temp dir for the model artifact unless we want to save it permanently now
-    
     # Determine model directory
     if args.model_dir:
         model_dir = args.model_dir
@@ -132,25 +112,11 @@ def main() -> None:
     
     model_dir.mkdir(parents=True, exist_ok=True)
     
-    # We need to re-run training to get the result object (metrics, trades, etc.)
-    # Since we don't have the result object from the study, only the params.
     try:
-        result = strategy.train(
-            train_data=None, # Strategy handles data internally if we pass None? No, we need to pass dataset.
-            # Wait, strategy.train signature in BaseStrategy is:
-            # train(train_data, valid_data, params, model_dir, seed)
-            # We need to prepare data first.
-            valid_data=None,
-            params=best_params,
-            model_dir=str(model_dir),
-            seed=42, # Use fixed seed for final model
-        )
-        
-        # But wait, we need to call prepare_data first to get the dataset!
-        # The engine did this inside the loop. We need to do it here.
+        # Prepare data
         dataset, metadata = strategy.prepare_data(cleaned_df, best_params)
         
-        # Now train
+        # Train final model
         result = strategy.train(
             train_data=dataset,
             valid_data=None,
@@ -168,11 +134,6 @@ def main() -> None:
         run_id = datetime.now(timezone.utc).isoformat()
         
         # Save Params
-        # We need metrics from the result. Assuming result has validation_metrics or test_metrics.
-        # StarTrainingResult has train_metrics, validation_metrics, test_metrics.
-        # BaseStrategy.train returns Any, so we need to inspect what it returns.
-        # StarXGBStrategy returns StarTrainingResult.
-        
         metrics_to_save = {}
         if hasattr(result, "test_metrics"):
              metrics_to_save = result.test_metrics
@@ -184,61 +145,28 @@ def main() -> None:
             strategy=args.strategy,
             symbol=args.symbol,
             timeframe=args.timeframe,
-            params=study.best_params, # Save only the optimized params? Or full config? Usually optimized.
+            params=study.best_params,
             metrics=format_metrics(metrics_to_save),
             stop_loss_pct=config.get("stop_loss_pct", 0.005),
             transaction_cost=config.get("transaction_cost", 0.001),
         )
         
-        # Save Trades (if available)
-        # StarTrainingResult doesn't directly have trades df, it has rankings.
-        # Wait, the original star_xgb_optuna.py ran backtest_star_xgb AFTER training to get trades.
-        # StarTrainingResult has model_path.
-        # We might need to run backtest here if the strategy.train doesn't return trades.
-        # StarXGBStrategy.train returns StarTrainingResult.
-        # We need to run backtest to get the trades DataFrame.
+        # Save Trades (Generic Backtest)
+        # We call strategy.backtest() which should handle data preparation internally or we pass raw data.
+        # BaseStrategy.backtest(raw_data, params, model_path)
         
-        # This implies we need a uniform way to get trades from a strategy.
-        # BaseStrategy doesn't enforce "get_trades".
-        # For now, let's assume we only save params if generic.
-        # BUT user specifically asked for trades persistence.
-        # So we should probably add `backtest` method to BaseStrategy or handle StarXGB specifically.
+        # Note: Some strategies might need model_path from result
+        model_path_str = None
+        if hasattr(result, "model_path"):
+            model_path_str = str(result.model_path)
+            
+        bt_result = strategy.backtest(
+            raw_data=cleaned_df,
+            params=best_params,
+            model_path=model_path_str
+        )
         
-        # Let's check StarXGBStrategy adapter. It just calls train_star_model.
-        # train_star_model returns StarTrainingResult.
-        # We need to run backtest.
-        
-        # For this specific task, I will add a check.
-        if args.strategy == "star_xgb":
-            from strategies.star_xgb.backtest import backtest_star_xgb
-            
-            # We need to split data again to get test set?
-            # Or just backtest on the whole set or specific set?
-            # Original code ran backtest on train, valid, test.
-            
-            # Let's just backtest on the "Test" portion (last N days).
-            # We need to split cleaned_df.
-            from strategies.star_xgb.dataset import split_train_test, prepend_warmup_rows, DEFAULT_WARMUP_BARS
-            
-            train_df, test_df = split_train_test(cleaned_df, test_days=args.test_days)
-            
-            # Prepare input for backtest (needs warmup)
-            test_input = prepend_warmup_rows(cleaned_df, test_df, DEFAULT_WARMUP_BARS)
-            
-            bt_result = backtest_star_xgb(
-                test_input,
-                result.indicator_params,
-                result.model_params,
-                model_path=str(result.model_path),
-                timeframe=args.timeframe,
-                class_means=result.class_means,
-                class_thresholds=result.class_thresholds,
-                feature_columns=result.feature_columns,
-                feature_stats=result.feature_stats,
-                transaction_cost=config.get("transaction_cost", 0.001),
-                stop_loss_pct=config.get("stop_loss_pct", 0.005),
-            )
-            
+        if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:
             save_trades(
                 args.store_path,
                 strategy=args.strategy,
@@ -277,7 +205,7 @@ def main() -> None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train and optimize trading strategies.")
     
-    parser.add_argument("--strategy", type=str, required=True, choices=list(STRATEGIES.keys()), help="Strategy to train")
+    parser.add_argument("--strategy", type=str, required=True, help="Strategy to train (must match folder name in src/strategies/)")
     parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument("--lookback-days", type=int, default=360)
@@ -298,8 +226,25 @@ def _parse_args() -> argparse.Namespace:
     # Storage Paths (Simplified)
     parser.add_argument("--store-path", type=Path, default=Path("storage/strategy_state.db"), help="Path to SQLite DB for params and trades")
     parser.add_argument("--model-dir", type=Path, default=None, help="Directory to save models (default: storage/models/{strategy})")
+    parser.add_argument("--dry-run", action="store_true", help="Run without saving to main DB (uses temp DB)")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    if args.dry_run:
+        # Create a temp file for DB
+        temp_dir = Path(tempfile.gettempdir()) / "quant_dry_run"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.store_path = temp_dir / f"dry_run_{timestamp}.db"
+        
+        if args.model_dir is None:
+            args.model_dir = temp_dir / f"models_{timestamp}"
+            
+        LOGGER.warning(f"DRY RUN MODE: Using temp storage at {args.store_path}")
+        LOGGER.warning(f"DRY RUN MODE: Models will be saved to {args.model_dir}")
+        
+    return args
 
 
 if __name__ == "__main__":

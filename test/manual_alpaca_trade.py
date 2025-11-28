@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+# Adjusted for test/manual_alpaca_trade.py
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
