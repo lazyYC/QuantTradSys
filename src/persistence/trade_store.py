@@ -126,8 +126,9 @@ CREATE TABLE IF NOT EXISTS strategy_trades (
     entry_zscore REAL NOT NULL,
     exit_zscore REAL NOT NULL,
     exit_reason TEXT NOT NULL,
-    PRIMARY KEY (run_id, dataset, entry_time, exit_time, symbol, timeframe)
+    PRIMARY KEY (run_id, dataset, entry_time)
 );
+CREATE INDEX IF NOT EXISTS idx_trades_lookup ON strategy_trades (strategy, study, symbol);
 """
 
 
@@ -148,8 +149,9 @@ CREATE TABLE IF NOT EXISTS strategy_metrics (
     period_start TEXT,
     period_end TEXT,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, strategy, study, dataset, symbol, timeframe)
+    PRIMARY KEY (run_id, dataset)
 );
+CREATE INDEX IF NOT EXISTS idx_metrics_lookup ON strategy_metrics (strategy, study, symbol);
 """
 
 
