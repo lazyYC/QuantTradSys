@@ -1,4 +1,7 @@
-"""Realtime engine for star_xgb strategy driven by Binance WebSocket closed klines."""
+"""
+Realtime engine for strategies driven by Binance WebSocket closed klines.
+Supports running a specific study of a strategy.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +16,13 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import pandas as pd
+
+# Add src to path
+import sys
+ROOT_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT_DIR / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from data_pipeline.binance_ws import BinanceKlineSubscriber
 from data_pipeline.ccxt_fetcher import (
@@ -35,22 +45,25 @@ from utils.symbols import canonicalize_symbol
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_LOG_PATH = Path("storage/logs/star_xgb_scheduler.log")
+DEFAULT_LOG_PATH = Path("storage/logs/scheduler.log")
 DEFAULT_STATE_DB = Path("storage/strategy_state.db")
 DEFAULT_MARKET_DB = Path("storage/market_data.db")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="star_xgb realtime engine (websocket driven)"
+        description="Realtime strategy engine (websocket driven)"
     )
     parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument(
-        "--strategy", type=str, default="star_xgb_default", help="策略名稱 (study name)"
+        "--strategy", type=str, required=True, help="Strategy algorithm name (e.g. star_xgb)"
     )
     parser.add_argument(
-        "--lookback-days", type=int, default=30, help="初始化時載入的歷史天數"
+        "--study", type=str, required=True, help="Study name (experiment ID)"
+    )
+    parser.add_argument(
+        "--lookback-days", type=int, default=30, help="History days to load for initialization"
     )
     parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
     parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
@@ -61,10 +74,11 @@ def main() -> None:
 
     _configure_logging(args.log_path)
 
-    engine = StarRealtimeEngine(
+    engine = RealtimeEngine(
         symbol=args.symbol,
         timeframe=args.timeframe,
         strategy=args.strategy,
+        study=args.study,
         lookback_days=args.lookback_days,
         params_store_path=args.params_db,
         state_store_path=args.state_db,
@@ -107,7 +121,7 @@ def _safe_concat(base: pd.DataFrame, row: pd.DataFrame, max_rows: int) -> pd.Dat
     return result
 
 
-class StarRealtimeEngine:
+class RealtimeEngine:
     """Manage WebSocket ingestion and strategy evaluation."""
 
     def __init__(
@@ -116,6 +130,7 @@ class StarRealtimeEngine:
         symbol: str,
         timeframe: str,
         strategy: str,
+        study: str,
         lookback_days: int,
         params_store_path: Path,
         state_store_path: Path,
@@ -126,6 +141,7 @@ class StarRealtimeEngine:
         self.symbol = canonicalize_symbol(symbol)
         self.timeframe = timeframe
         self.strategy = strategy
+        self.study = study
         self.lookback_days = lookback_days
         self.params_store_path = params_store_path
         self.state_store_path = state_store_path
@@ -133,78 +149,53 @@ class StarRealtimeEngine:
         self.exchange = exchange
         self.exchange_config = exchange_config
 
+        # Load Strategy Params
         record = load_strategy_params(
-            self.params_store_path, strategy, self.symbol, timeframe
+            self.params_store_path, 
+            strategy=strategy, 
+            study=study, 
+            symbol=self.symbol, 
+            timeframe=timeframe
         )
         if record is None or not isinstance(record.params, dict):
-            raise RuntimeError(f"找不到策略 {strategy} 的參數設定")
+            raise RuntimeError(f"Parameters not found for strategy={strategy} study={study}")
+            
         payload = record.params
-        indicator_payload = payload.get("indicator")
-        model_payload = payload.get("model")
-        model_path = payload.get("model_path")
-        feature_columns = payload.get("feature_columns")
-        class_means = payload.get("class_means")
-        feature_stats = payload.get("feature_stats")
-        if not all(
-            [
-                indicator_payload,
-                model_payload,
-                model_path,
-                feature_columns,
-                class_means,
-                feature_stats,
-            ]
-        ):
-            raise RuntimeError(f"策略 {strategy} 的參數資料缺漏")
-        self.indicator = StarIndicatorParams(**indicator_payload)
-        self.model_params = StarModelParams(**model_payload)
-        self.feature_columns = feature_columns
-        self.class_means = class_means
-        self.feature_stats = feature_stats
-        self.model = load_star_model(model_path)
+        
+        # Validate StarXGB specific params (TODO: Make this generic via Strategy Interface)
+        # For now, we keep it coupled to StarXGB as per original file, but we should refactor later.
+        if strategy == "star_xgb":
+            self._init_star_xgb(payload)
+        else:
+            raise NotImplementedError(f"Strategy {strategy} not supported in realtime engine yet.")
 
         self.timeframe_offset = timeframe_to_offset(self.timeframe)
-        self.min_hold_bars = max(int(self.indicator.future_window), 0)
-        self.min_hold_duration = (
-            self.timeframe_offset * self.min_hold_bars
-            if self.min_hold_bars > 0
-            else None
-        )
-        self.stop_loss_pct = self._resolve_stop_loss_pct(
-            payload.get("stop_loss_pct")
-        )
-
+        
+        # Load Runtime State
         runtime_record = load_runtime_state(
-            self.state_store_path, strategy, self.symbol, timeframe
+            self.state_store_path, 
+            strategy=strategy, 
+            study=study, 
+            symbol=self.symbol, 
+            timeframe=timeframe
         )
-        self.runtime_state = StarRuntimeState.from_dict(
-            runtime_record.state if runtime_record else None
-        )
-        if (
-            self.runtime_state.position_side
-            and self.runtime_state.entry_timestamp is not None
-            and self.min_hold_duration is not None
-            and self.runtime_state.min_exit_timestamp is None
-        ):
-            self.runtime_state.min_exit_timestamp = (
-                self.runtime_state.entry_timestamp + self.min_hold_duration
+        
+        if strategy == "star_xgb":
+            self.runtime_state = StarRuntimeState.from_dict(
+                runtime_record.state if runtime_record else None
             )
+            # Restore min_exit_timestamp if needed
+            if (
+                self.runtime_state.position_side
+                and self.runtime_state.entry_timestamp is not None
+                and self.min_hold_duration is not None
+                and self.runtime_state.min_exit_timestamp is None
+            ):
+                self.runtime_state.min_exit_timestamp = (
+                    self.runtime_state.entry_timestamp + self.min_hold_duration
+                )
 
-        if self.min_hold_duration is not None:
-            LOGGER.info(
-                "Runtime min hold configured | bars=%s duration=%s",
-                self.min_hold_bars,
-                self.min_hold_duration,
-            )
-        else:
-            LOGGER.info("Runtime min hold disabled (future_window=%s)", self.min_hold_bars)
-
-        if self.stop_loss_pct is not None:
-            LOGGER.info("Runtime stop loss pct=%.4f", self.stop_loss_pct)
-        else:
-            LOGGER.info("Runtime stop loss disabled")
-
-        LOGGER.info("初始化 OHLCV 資料 (REST)")
+        LOGGER.info("Initializing OHLCV data (REST)...")
         raw_df = fetch_yearly_ohlcv(
             symbol=self.symbol,
             timeframe=timeframe,
@@ -216,7 +207,7 @@ class StarRealtimeEngine:
         )
         prepared = prepare_ohlcv_frame(raw_df, timeframe)
         if prepared.empty:
-            raise RuntimeError(f"{self.symbol} {timeframe} 無歷史 OHLCV 資料")
+            raise RuntimeError(f"No historical OHLCV data for {self.symbol} {timeframe}")
 
         self.data_lock = threading.Lock()
         self.db_conn = ensure_database(market_db_path)
@@ -228,14 +219,49 @@ class StarRealtimeEngine:
 
         self.subscriber: Optional[BinanceKlineSubscriber] = None
 
+    def _init_star_xgb(self, payload: Dict) -> None:
+        indicator_payload = payload.get("indicator")
+        model_payload = payload.get("model")
+        model_path = payload.get("model_path")
+        feature_columns = payload.get("feature_columns")
+        class_means = payload.get("class_means")
+        feature_stats = payload.get("feature_stats")
+        
+        if not all([indicator_payload, model_payload, model_path, feature_columns, class_means, feature_stats]):
+             raise RuntimeError(f"Missing parameters for star_xgb strategy={self.strategy} study={self.study}")
+             
+        self.indicator = StarIndicatorParams(**indicator_payload)
+        self.model_params = StarModelParams(**model_payload)
+        self.feature_columns = feature_columns
+        self.class_means = class_means
+        self.feature_stats = feature_stats
+        self.model = load_star_model(model_path)
+        
+        self.min_hold_bars = max(int(self.indicator.future_window), 0)
+        self.min_hold_duration = (
+            timeframe_to_offset(self.timeframe) * self.min_hold_bars
+            if self.min_hold_bars > 0
+            else None
+        )
+        self.stop_loss_pct = self._resolve_stop_loss_pct(payload.get("stop_loss_pct"))
+        
+        if self.min_hold_duration:
+            LOGGER.info("Runtime min hold: bars=%s duration=%s", self.min_hold_bars, self.min_hold_duration)
+        else:
+            LOGGER.info("Runtime min hold disabled")
+            
+        if self.stop_loss_pct:
+            LOGGER.info("Runtime stop loss: %.4f", self.stop_loss_pct)
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
 
     def start(self) -> None:
         LOGGER.info(
-            "啟動 star_xgb websocket 引擎 | strategy=%s symbol=%s timeframe=%s lookback=%sd",
+            "Starting Realtime Engine | strategy=%s study=%s symbol=%s timeframe=%s lookback=%sd",
             self.strategy,
+            self.study,
             self.symbol,
             self.timeframe,
             self.lookback_days,
@@ -252,12 +278,12 @@ class StarRealtimeEngine:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            LOGGER.info("收到中斷訊號，準備關閉...")
+            LOGGER.info("Interrupt received, shutting down...")
         finally:
             if self.subscriber:
                 self.subscriber.stop()
             self.db_conn.close()
-            LOGGER.info("star_xgb websocket 引擎已關閉")
+            LOGGER.info("Realtime Engine stopped")
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -292,12 +318,17 @@ class StarRealtimeEngine:
                 self.timeframe,
                 [(ts_open, iso_ts, open_, high, low, close, volume)],
             )
-        LOGGER.info("收到封棒: %s close=%s volume=%s", ts.isoformat(), close, volume)
+        LOGGER.info("Closed Kline: %s close=%s volume=%s", ts.isoformat(), close, volume)
         self._evaluate("websocket")
 
     def _evaluate(self, source: str) -> None:
+        if self.strategy == "star_xgb":
+            self._evaluate_star_xgb(source)
+
+    def _evaluate_star_xgb(self, source: str) -> None:
         with self.data_lock:
             df = self.price_df.copy()
+            
         cache = StarFeatureCache(
             df,
             trend_windows=[self.indicator.trend_window],
@@ -306,6 +337,7 @@ class StarRealtimeEngine:
             volume_windows=[self.indicator.volume_window],
             pattern_windows=[self.indicator.pattern_lookback],
         )
+        
         action, context, new_state = generate_realtime_signal(
             df=df,
             indicator_params=self.indicator,
@@ -319,21 +351,25 @@ class StarRealtimeEngine:
             min_hold_duration=self.min_hold_duration,
             stop_loss_pct=self.stop_loss_pct,
         )
+        
         context.update(
             {
                 "strategy": self.strategy,
+                "study": self.study,
                 "symbol": self.symbol,
                 "timeframe": self.timeframe,
-                # "source": source,
                 "received_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+        
         colored_action = self.assign_color(action)
-        context = self.filter_context(context)
-        context["action"] = colored_action
-        context_str = "\n".join([f"{k}: {v}" for k, v in context.items()])
+        context_filtered = self.filter_context(context)
+        context_filtered["action"] = colored_action
+        
+        context_str = "\n".join([f"{k}: {v}" for k, v in context_filtered.items()])
         context_str += "\n--------------------------------"
         LOGGER.info(f"{context_str}")
+        
         trade_executed = True
         if action != "HOLD":
             trade_executed = dispatch_signal(action, context)
@@ -346,6 +382,7 @@ class StarRealtimeEngine:
             save_runtime_state(
                 self.state_store_path,
                 strategy=self.strategy,
+                study=self.study,
                 symbol=self.symbol,
                 timeframe=self.timeframe,
                 state=new_state.to_dict(),
@@ -397,7 +434,7 @@ class StarRealtimeEngine:
         }
 
         if kwargs.get("color"):
-            return f"{color_map[kwargs["color"]]}{action}{color_map['RESET']}"
+            return f"{color_map[kwargs['color']]}{action}{color_map['RESET']}"
 
         if action == "ENTER_LONG":
             return f"{color_map['GREEN']}ENTER_LONG{color_map['RESET']}"
@@ -408,7 +445,7 @@ class StarRealtimeEngine:
         elif action == "EXIT_SHORT":
             return f"{color_map['RED']}EXIT_SHORT{color_map['RESET']}"
         return f"{color_map['YELLOW']}HOLD{color_map['RESET']}"
- 
+
 
 if __name__ == "__main__":
     main()

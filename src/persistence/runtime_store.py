@@ -11,11 +11,12 @@ LOGGER = logging.getLogger(__name__)
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS strategy_runtime (
     strategy TEXT NOT NULL,
+    study TEXT NOT NULL DEFAULT '',
     symbol TEXT NOT NULL,
     timeframe TEXT NOT NULL,
     state_json TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    PRIMARY KEY (strategy, symbol, timeframe)
+    PRIMARY KEY (strategy, study, symbol, timeframe)
 );
 """
 
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS strategy_runtime (
 @dataclass
 class RuntimeRecord:
     strategy: str
+    study: str
     symbol: str
     timeframe: str
     state: Dict[str, Any]
@@ -35,8 +37,36 @@ def _ensure_connection(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
-    with conn:
-        conn.executescript(SCHEMA_SQL)
+    
+    # Check if table exists
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='strategy_runtime'")
+    table_exists = cursor.fetchone() is not None
+    
+    if not table_exists:
+        with conn:
+            conn.executescript(SCHEMA_SQL)
+    else:
+        # Check if study column exists
+        cursor = conn.execute("PRAGMA table_info(strategy_runtime)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "study" not in columns:
+            LOGGER.info("Migrating strategy_runtime table: adding study column")
+            with conn:
+                # SQLite doesn't support adding column to PK easily.
+                # Since this is runtime state, we can drop and recreate or just add column and ignore PK constraint for now?
+                # Actually, for runtime state, it's better to recreate or just add column.
+                # But PK needs to be updated.
+                # Let's just add the column for now, and rely on unique index if we had one.
+                # But we have a PK.
+                # Strategy: Rename table, create new, copy data.
+                conn.execute("ALTER TABLE strategy_runtime RENAME TO strategy_runtime_old")
+                conn.executescript(SCHEMA_SQL)
+                conn.execute("""
+                    INSERT INTO strategy_runtime (strategy, study, symbol, timeframe, state_json, updated_at)
+                    SELECT strategy, '', symbol, timeframe, state_json, updated_at FROM strategy_runtime_old
+                """)
+                conn.execute("DROP TABLE strategy_runtime_old")
+                
     return conn
 
 
@@ -44,6 +74,7 @@ def save_runtime_state(
     db_path: Path,
     *,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
     state: Dict[str, Any],
@@ -56,20 +87,22 @@ def save_runtime_state(
         conn.execute(
             """
             INSERT OR REPLACE INTO strategy_runtime (
-                strategy, symbol, timeframe, state_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
+                strategy, study, symbol, timeframe, state_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (strategy, symbol, timeframe, payload, now),
+            (strategy, study, symbol, timeframe, payload, now),
         )
     conn.close()
     LOGGER.debug(
-        "Saved runtime state strategy=%s symbol=%s timeframe=%s",
+        "Saved runtime state strategy=%s study=%s symbol=%s timeframe=%s",
         strategy,
+        study,
         symbol,
         timeframe,
     )
     return RuntimeRecord(
         strategy=strategy,
+        study=study,
         symbol=symbol,
         timeframe=timeframe,
         state=state,
@@ -79,8 +112,8 @@ def save_runtime_state(
 
 def load_runtime_state(
     db_path: Path,
-    # *,
     strategy: str,
+    study: str,
     symbol: str,
     timeframe: str,
 ) -> Optional[RuntimeRecord]:
@@ -90,9 +123,9 @@ def load_runtime_state(
         """
         SELECT state_json, updated_at
         FROM strategy_runtime
-        WHERE strategy = ? AND symbol = ? AND timeframe = ?
+        WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ?
         """,
-        (strategy, symbol, timeframe),
+        (strategy, study, symbol, timeframe),
     )
     row = cursor.fetchone()
     conn.close()
@@ -102,6 +135,7 @@ def load_runtime_state(
     state = json.loads(state_json) if state_json else {}
     return RuntimeRecord(
         strategy=strategy,
+        study=study,
         symbol=symbol,
         timeframe=timeframe,
         state=state,
