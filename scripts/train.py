@@ -186,21 +186,33 @@ def main() -> None:
         # Split data for recording
         # from strategies.data_utils import split_train_test # Unused
         
-        # Let's do a simple time-based split for recording
-        test_days = args.test_days
-        cutoff_date = cleaned_df["timestamp"].max() - pd.Timedelta(days=test_days)
+        # Split data for recording based on user requirement:
+        # Test: Last 30 days (Day 331-360)
+        # Valid: Previous 30 days (Day 301-330)
+        # Train: The rest (Day 1-300)
         
-        train_df = cleaned_df[cleaned_df["timestamp"] <= cutoff_date]
-        test_df = cleaned_df[cleaned_df["timestamp"] > cutoff_date]
+        test_days = args.test_days
+        # Assuming valid_days is same as test_days for now, or we could add an arg.
+        # The user said "Day 301 ~ Day 330 = valid", which implies valid_days = test_days = 30.
+        valid_days = test_days 
+        
+        max_timestamp = cleaned_df["timestamp"].max()
+        test_cutoff = max_timestamp - pd.Timedelta(days=test_days)
+        valid_cutoff = test_cutoff - pd.Timedelta(days=valid_days)
+        
+        test_df = cleaned_df[cleaned_df["timestamp"] > test_cutoff]
+        valid_df = cleaned_df[(cleaned_df["timestamp"] > valid_cutoff) & (cleaned_df["timestamp"] <= test_cutoff)]
+        train_df = cleaned_df[cleaned_df["timestamp"] <= valid_cutoff]
         
         datasets_to_run = [
             ("train", train_df),
+            ("valid", valid_df),
             ("test", test_df),
-            ("all", cleaned_df)
         ]
         
         for ds_name, ds_data in datasets_to_run:
             if ds_data.empty:
+                LOGGER.warning(f"Dataset {ds_name} is empty, skipping backtest for it.")
                 continue
                 
             bt_result = strategy.backtest(
