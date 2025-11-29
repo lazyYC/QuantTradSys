@@ -21,18 +21,18 @@ from persistence.trade_store import (
     save_trades,
 )
 from utils.data_utils import prepare_ohlcv_frame
-from strategies.star_xgb.backtest import backtest_star_xgb, StarBacktestResult
-from strategies.star_xgb.dataset import (
+from .backtest import backtest_star_xgb, StarBacktestResult
+from .dataset import (
     TARGET_COLUMN,
     DEFAULT_WARMUP_BARS,
     build_training_dataset,
     prepend_warmup_rows,
     split_train_test,
 )
-from strategies.star_xgb.features import StarFeatureCache
-from strategies.star_xgb.labels import build_label_frame
-from strategies.star_xgb.model import StarTrainingResult, train_star_model
-from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
+from .features import StarFeatureCache
+from .labels import build_label_frame
+from .model import StarTrainingResult, train_star_model
+from .params import StarIndicatorParams, StarModelParams
 from utils.formatting import format_metrics
 from utils.symbols import canonicalize_symbol
 
@@ -99,13 +99,13 @@ def optimize_star_xgb(
     cleaned = prepare_ohlcv_frame(raw_df, timeframe)
     train_df, test_df = split_train_test(cleaned, test_days=test_days)
     if train_df.empty:
-        raise ValueError("train set ?箇征嚗��?瑼Ｘ�亥���?靘��?")
+        raise ValueError("train set is empty")
     if test_df.empty:
-        raise ValueError("test set ?箇征嚗��?瑼Ｘ�亥���?靘��?")
+        raise ValueError("test set is empty")
 
     def _objective(trial: Trial) -> float:
-        indicator_params = _suggest_indicator(trial, future_window_choices)
-        model_params = _suggest_model(trial)
+        indicator_params = suggest_indicator_params(trial, future_window_choices)
+        model_params = suggest_model_params(trial)
 
         cache = StarFeatureCache(
             train_df,
@@ -125,7 +125,7 @@ def optimize_star_xgb(
         )
 
         if dataset.empty or dataset[TARGET_COLUMN].nunique() < 2:
-            raise optuna.TrialPruned("鞈��??���箇征�??芣??桐?憿����")
+            raise optuna.TrialPruned("Dataset empty or single class")
 
         seed_scores: list[float] = []
         best_seed_result: StarTrainingResult | None = None
@@ -177,7 +177,7 @@ def optimize_star_xgb(
     best_indicator = StarIndicatorParams(**best_trial.user_attrs["indicator_params"])
     best_model_params = StarModelParams(**best_trial.user_attrs["model_params"])
 
-    # 雿輻��?�雿喳??賊??啗?蝺游??湔芋?�銝�?瑁??�皜�
+    # Re-train with best params
     train_cache = StarFeatureCache(
         train_df,
         trend_windows=[best_indicator.trend_window],
@@ -195,8 +195,6 @@ def optimize_star_xgb(
         min_abs_future_return=best_indicator.future_return_threshold,
     )
 
-    best_seed = best_trial.user_attrs.get("best_seed", seeds[0])
-    
     best_seed = best_trial.user_attrs.get("best_seed", seeds[0])
 
     training_result = train_star_model(
@@ -311,7 +309,7 @@ def optimize_star_xgb(
         stop_loss_pct=stop_loss_pct,
     )
 
-    # ?脣?蝯��?
+    # Persist results
     if _should_persist_results(study, result_guard_dir):
         run_id = datetime.now(timezone.utc).isoformat()
         strategy_key = study.study_name or "star_xgb_default"
@@ -423,11 +421,14 @@ def _acquire_result_guard(study_name: Optional[str], guard_dir: Path) -> bool:
     return True
 
 
-
-def _suggest_indicator(
-    trial: Trial, future_window_choices: Sequence[int]
+def suggest_indicator_params(
+    trial: Trial, future_window_choices: Optional[Sequence[int]] = None
 ) -> StarIndicatorParams:
-    return StarIndicatorParams(
+    """
+    Suggest indicator parameters using Optuna.
+    If future_window_choices is provided, also suggest future_window and return_threshold (Legacy mode).
+    """
+    params = dict(
         trend_window=trial.suggest_categorical("trend_window", [45, 60, 75]),
         slope_window=trial.suggest_categorical("slope_window", [5, 10]),
         atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
@@ -437,16 +438,27 @@ def _suggest_indicator(
         upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
         body_ratio_max=trial.suggest_float("body_ratio_max", 0.16, 0.22, step=0.02),
         volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.55, 0.8, step=0.05),
-        future_window=trial.suggest_categorical(
-            "future_window", sorted(set(int(x) for x in future_window_choices))
-        ),
-        future_return_threshold=trial.suggest_float(
-            "future_return_threshold", 0.0, 0.0001, step=0.0001
-        ),
     )
+    
+    if future_window_choices:
+        params["future_window"] = trial.suggest_categorical(
+            "future_window", sorted(set(int(x) for x in future_window_choices))
+        )
+        params["future_return_threshold"] = trial.suggest_float(
+            "future_return_threshold", 0.0, 0.0001, step=0.0001
+        )
+    else:
+        # Defaults for when not optimizing target (these will be overwritten by fixed config usually)
+        # But StarIndicatorParams requires them.
+        # We can put dummy values here, as they should be overridden or ignored if we are using fixed targets.
+        # However, StarIndicatorParams validation might require them.
+        params["future_window"] = 5
+        params["future_return_threshold"] = 0.001
+
+    return StarIndicatorParams(**params)
 
 
-def _suggest_model(trial: Trial) -> StarModelParams:
+def suggest_model_params(trial: Trial) -> StarModelParams:
     return StarModelParams(
         num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
         max_depth=trial.suggest_int("max_depth", 3, 6),
