@@ -13,11 +13,9 @@ import tempfile
 
 import pandas as pd
 
-# Add src to path
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# 1. Setup (Path, Logging, Config)
+import _setup
+from _setup import DEFAULT_STATE_DB
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from optimization.engine import optimize_strategy
@@ -31,7 +29,6 @@ logging.basicConfig(
 )
 LOGGER = logging.getLogger(__name__)
 
-# STRATEGIES dict is removed
 
 def main() -> None:
     args = _parse_args()
@@ -275,7 +272,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--use-gpu", action="store_true")
     
     # Storage Paths (Simplified)
-    parser.add_argument("--store-path", type=Path, default=Path("storage/strategy_state.db"), help="Path to SQLite DB for params and trades")
+    parser.add_argument("--store-path", type=Path, default=DEFAULT_STATE_DB, help="Path to SQLite DB for params and trades")
     parser.add_argument("--model-dir", type=Path, default=None, help="Directory to save models (default: storage/models/{strategy})")
     parser.add_argument("--dry-run", action="store_true", help="Run without saving to main DB (uses temp DB)")
     

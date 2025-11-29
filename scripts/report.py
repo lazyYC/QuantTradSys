@@ -13,13 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple, Mapping
 import pandas as pd
 import sqlite3
 
-# Add src to path
-ROOT_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT_DIR / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# 1. Setup (Path, Logging, Config)
+import _setup
+from _setup import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
 
-FAVICON_PATH = SRC_DIR / "config" / "favicon.png"
+FAVICON_PATH = _setup.SRC_DIR / "config" / "favicon.png"
 
 from persistence.param_store import load_strategy_params
 from persistence.trade_store import load_metrics, load_trades
@@ -36,15 +34,36 @@ from reporting.tables import (
 )
 from reporting.plotting import build_candlestick_figure, build_trade_overview_figure
 
-logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
     args = parse_args()
-    args.symbol = canonicalize_symbol(args.symbol)
+    _setup.setup_logging()
     
-    # 1. Load Strategy Class (Dynamic)
+    # 1. Load Strategy Params & Metadata
+    # We load this FIRST to get symbol/timeframe
+    study_name = args.study if args.study else "strategy_optimization"
+    
+    params_record = load_strategy_params(
+        args.store_path,
+        strategy=args.strategy,
+        study=study_name,
+        # symbol/timeframe inferred from study
+    )
+    
+    if not params_record:
+        LOGGER.error(f"No parameters found for strategy='{args.strategy}' study='{study_name}'. Please train first.")
+        sys.exit(1)
+        
+    symbol = params_record.symbol
+    timeframe = params_record.timeframe
+    params = params_record.params
+    model_path = params_record.model_path
+    
+    LOGGER.info(f"Loaded study '{study_name}': {symbol} {timeframe}")
+    
+    # 2. Load Strategy Class
     try:
         strategy_class = load_strategy_class(args.strategy)
     except ValueError as e:
@@ -53,120 +72,83 @@ def main() -> None:
         
     strategy = strategy_class()
 
-    # 2. Parse Time Boundaries
+    # 3. Parse Time Boundaries
     start_ts, end_ts = _parse_time_boundaries(args.start, args.end)
     if start_ts and end_ts and start_ts > end_ts:
         LOGGER.error("Start time must be before end time.")
         sys.exit(1)
 
-    # 3. Load Data (OHLCV)
+    # 4. Load Data (OHLCV)
     candles = _load_candles_from_db(
         Path(args.ohlcv_db),
-        args.symbol,
-        args.timeframe,
+        symbol,
+        timeframe,
         start_ts=start_ts,
         end_ts=end_ts,
     )
     if candles.empty:
-        LOGGER.error("No OHLCV data found.")
+        LOGGER.error(f"No OHLCV data found for {symbol} {timeframe}.")
         sys.exit(1)
 
-    # 4. Load Params & Results
-    study_name = args.study if args.study else "strategy_optimization"
-    
-    params_record = load_strategy_params(
-        args.store_path,
-        strategy=args.strategy,
-        study=study_name,
-        symbol=args.symbol,
-        timeframe=args.timeframe,
-    )
-    
-    params = params_record.params if params_record else {}
-    model_path = params_record.model_path if params_record else None
-    
-    # 5. Load Trades & Metrics (Handle 'all' dataset)
+    # 5. Load Trades & Metrics (Always load 'all' datasets and aggregate)
     trades_df = pd.DataFrame()
     metrics_df = pd.DataFrame()
     sections: List[Mapping[str, object]] = []
     
     force_rerun = args.rerun
 
-    if args.dataset == "all":
-        metric_frames: List[pd.DataFrame] = []
-        trade_frames: List[pd.DataFrame] = []
-        
-        # If not forcing rerun, try to load from DB
-        if not force_rerun:
-            for ds in ("train", "valid", "test"):
-                metrics_ds = _load_metrics_from_db(
-                    args, study_name, dataset_label=ds, start_ts=start_ts, end_ts=end_ts
-                )
-                if not metrics_ds.empty:
-                    metrics_local = metrics_ds.copy()
-                    metrics_local["dataset"] = ds
-                    metric_frames.append(metrics_local.head(1))
-                
-                trades_ds = _load_trades_from_db(
-                    args, study_name, dataset_label=ds, start_ts=start_ts, end_ts=end_ts
-                )
-                if not trades_ds.empty:
-                    trades_local = trades_ds.copy()
-                    trades_local["dataset"] = ds
-                    trade_frames.append(trades_local)
-        
-        metrics_df = pd.concat(metric_frames, ignore_index=True) if metric_frames else pd.DataFrame()
-        trades_df = pd.concat(trade_frames, ignore_index=True) if trade_frames else pd.DataFrame()
-        
-        if not trades_df.empty and "entry_time" in trades_df.columns:
-            trades_df = trades_df.sort_values("entry_time").reset_index(drop=True)
+    metric_frames: List[pd.DataFrame] = []
+    trade_frames: List[pd.DataFrame] = []
+    
+    # If not forcing rerun, try to load from DB
+    if not force_rerun:
+        for ds in ("train", "valid", "test"):
+            metrics_ds = _load_metrics_from_db(
+                args.store_path, args.strategy, study_name, symbol, timeframe,
+                dataset_label=ds, start_ts=start_ts, end_ts=end_ts
+            )
+            if not metrics_ds.empty:
+                metrics_local = metrics_ds.copy()
+                metrics_local["dataset"] = ds
+                metric_frames.append(metrics_local.head(1))
             
-    else:
-        # Single dataset
-        if not force_rerun:
-            metrics_df = _load_metrics_from_db(args, study_name, start_ts=start_ts, end_ts=end_ts)
-            trades_df = _load_trades_from_db(args, study_name, start_ts=start_ts, end_ts=end_ts)
+            trades_ds = _load_trades_from_db(
+                args.store_path, args.strategy, study_name, symbol, timeframe,
+                dataset_label=ds, start_ts=start_ts, end_ts=end_ts
+            )
+            if not trades_ds.empty:
+                trades_local = trades_ds.copy()
+                trades_local["dataset"] = ds
+                trade_frames.append(trades_local)
+    
+    metrics_df = pd.concat(metric_frames, ignore_index=True) if metric_frames else pd.DataFrame()
+    trades_df = pd.concat(trade_frames, ignore_index=True) if trade_frames else pd.DataFrame()
+    
+    if not trades_df.empty and "entry_time" in trades_df.columns:
+        trades_df = trades_df.sort_values("entry_time").reset_index(drop=True)
 
     # 6. Rerun Backtest if needed
     need_rerun = force_rerun or trades_df.empty or metrics_df.empty
     
     if need_rerun:
         LOGGER.info("Running backtest..." if force_rerun else "No saved data found, running backtest...")
-        
-        if not params:
-            LOGGER.error(f"No parameters found for study '{study_name}'. Please train first.")
-            sys.exit(1)
             
         # Run backtest via Strategy Interface
-        # We pass the full candles df, the strategy should handle filtering if needed, 
-        # but typically backtest runs on provided data.
-        # If we want to replicate 'all' behavior with splits, we might need to run backtest on full data 
-        # and then split it ourselves, OR run backtest on splits if the strategy supports it.
-        # For simplicity/generality, we run on the loaded candles (which are already filtered by time if args provided).
-        
         result = strategy.backtest(candles, params, model_path=model_path)
         
         # Normalize result
         trades_df = result.trades
         metrics_df = pd.DataFrame([result.metrics])
         
-        # If dataset='all', we might want to try to reconstruct splits?
-        # The strategy.backtest typically returns one set of trades.
-        # If we want to show splits, we need to know the split logic.
-        # Since we don't know the split logic here easily without duplicating train.py logic,
-        # we will just treat it as one big backtest if rerunning.
-        # UNLESS we can infer it from the result (e.g. if result has split info).
-        # For now, we accept that a rerun on 'all' might produce a single combined metric/trade set 
-        # without the explicit 'dataset' column unless we add it.
-        if args.dataset == "all" and not trades_df.empty:
-            trades_df["dataset"] = "all" # Placeholder
+        if not trades_df.empty:
+            trades_df["dataset"] = "backtest" 
             
     # 7. Build Equity Curve
     equity_df = _build_equity_from_trades(trades_df)
     equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
 
     # 8. Build Sections for Chart (if applicable)
-    if args.dataset == "all" and not metrics_df.empty:
+    if not metrics_df.empty:
         if {"period_start", "period_end"}.issubset(metrics_df.columns):
             for _, row in metrics_df.iterrows():
                 start_val = row.get("period_start")
@@ -252,21 +234,23 @@ def _load_candles_from_db(
 
 
 def _load_trades_from_db(
-    args: argparse.Namespace,
-    study_name: str,
+    store_path: Path,
+    strategy: str,
+    study: str,
+    symbol: str,
+    timeframe: str,
     *,
-    dataset_label: str | None = None,
+    dataset_label: str,
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    dataset = dataset_label or args.dataset
     df = load_trades(
-        args.store_path,
-        strategy=args.strategy,
-        study=study_name,
-        dataset=dataset,
-        symbol=args.symbol,
-        timeframe=args.timeframe,
+        store_path,
+        strategy=strategy,
+        study=study,
+        dataset=dataset_label,
+        symbol=symbol,
+        timeframe=timeframe,
     )
     if not df.empty:
         trades = df.copy()
@@ -277,21 +261,23 @@ def _load_trades_from_db(
 
 
 def _load_metrics_from_db(
-    args: argparse.Namespace,
-    study_name: str,
+    store_path: Path,
+    strategy: str,
+    study: str,
+    symbol: str,
+    timeframe: str,
     *,
-    dataset_label: str | None = None,
+    dataset_label: str,
     start_ts: pd.Timestamp | None = None,
     end_ts: pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    dataset = dataset_label or args.dataset
     df = load_metrics(
-        args.store_path,
-        strategy=args.strategy,
-        study=study_name,
-        dataset=dataset,
-        symbol=args.symbol,
-        timeframe=args.timeframe,
+        store_path,
+        strategy=strategy,
+        study=study,
+        dataset=dataset_label,
+        symbol=symbol,
+        timeframe=timeframe,
     )
     if not df.empty:
         metrics = df.copy()
@@ -447,16 +433,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Strategy Report")
     parser.add_argument("--strategy", required=True)
     parser.add_argument("--study", help="Study name (experiment ID)")
-    parser.add_argument("--symbol", default="BTC/USDT:USDT")
-    parser.add_argument("--timeframe", default="5m")
-    parser.add_argument("--store-path", type=Path, default=Path("storage/strategy_state.db"))
-    parser.add_argument("--ohlcv-db", default="storage/market_data.db")
+    parser.add_argument("--store-path", type=Path, default=DEFAULT_STATE_DB)
+    parser.add_argument("--ohlcv-db", default=DEFAULT_MARKET_DB)
     parser.add_argument("--output", default="reports/report.html")
     parser.add_argument("--title", help="Report Title")
     parser.add_argument("--rerun", action="store_true", help="Force rerun backtest")
     parser.add_argument("--start", help="Start Date (ISO)")
     parser.add_argument("--end", help="End Date (ISO)")
-    parser.add_argument("--dataset", default="all", choices=["train", "valid", "test", "all"], help="Dataset to report on")
     return parser.parse_args()
 
 

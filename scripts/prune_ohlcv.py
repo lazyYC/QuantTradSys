@@ -3,6 +3,10 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+# 1. Setup (Path, Logging, Config)
+import _setup
+from _setup import DEFAULT_MARKET_DB
+
 from utils.symbols import canonicalize_symbol
 
 MILLIS_PER_DAY = 86_400_000
@@ -15,7 +19,7 @@ def main() -> None:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path("storage/market_data.db"),
+        default=DEFAULT_MARKET_DB,
         help="SQLite database path",
     )
     parser.add_argument("--symbol", required=True, help="Trading symbol, e.g. BTC/USDT")

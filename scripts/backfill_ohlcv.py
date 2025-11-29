@@ -4,12 +4,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
+# 1. Setup (Path, Logging, Config)
+import _setup
+from _setup import DEFAULT_MARKET_DB
 
 import pandas as pd
 
 from data_pipeline.ccxt_fetcher import (
-    configure_logging,
     ensure_database,
     fetch_yearly_ohlcv,
     prune_older_rows,
@@ -30,7 +31,7 @@ def main() -> None:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path("storage/market_data.db"),
+        default=DEFAULT_MARKET_DB,
         help="SQLite database path",
     )
     parser.add_argument(
@@ -41,7 +42,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    configure_logging()
+    _setup.setup_logging()
     LOGGER.info(
         "Fetching %s %s for %s days", args.symbol, args.timeframe, args.lookback_days
     )
