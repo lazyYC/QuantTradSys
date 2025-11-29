@@ -98,27 +98,62 @@ def load_strategy_params(
     db_path: Path,
     strategy: str,
     study: str,
-    symbol: str,
-    timeframe: str,
+    symbol: Optional[str] = None,
+    timeframe: Optional[str] = None,
 ) -> Optional[StrategyRecord]:
-    """讀取最新的策略參數，如果不存在則回傳 None。"""
+    """
+    讀取最新的策略參數。
+    如果 symbol/timeframe 為 None，則只根據 strategy/study 查詢 (假設 study 對應單一 symbol/timeframe)。
+    """
     conn = _ensure_connection(db_path)
-    cursor = conn.execute(
-        """
-        SELECT params_json, metrics_json, model_path, updated_at
-        FROM strategy_params
-        WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ?
-        """,
-        (strategy, study, symbol, timeframe),
-    )
+    
+    if symbol and timeframe:
+        cursor = conn.execute(
+            """
+            SELECT params_json, metrics_json, model_path, updated_at
+            FROM strategy_params
+            WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ?
+            """,
+            (strategy, study, symbol, timeframe),
+        )
+    else:
+        # Loose lookup by strategy and study
+        cursor = conn.execute(
+            """
+            SELECT params_json, metrics_json, model_path, updated_at, symbol, timeframe
+            FROM strategy_params
+            WHERE strategy = ? AND study = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (strategy, study),
+        )
+        
     row = cursor.fetchone()
     conn.close()
+    
     if row is None:
         return None
-    params = json.loads(row[0])
-    metrics = json.loads(row[1])
-    model_path = row[2]
-    updated_at = row[3]
+        
+    if len(row) == 4:
+        # Exact match
+        params_json, metrics_json, model_path, updated_at = row
+        # symbol/timeframe are from args
+    else:
+        # Loose match, retrieve symbol/timeframe from DB
+        params_json, metrics_json, model_path, updated_at, db_symbol, db_timeframe = row
+        symbol = db_symbol
+        timeframe = db_timeframe
+
+    params = json.loads(params_json)
+    metrics = json.loads(metrics_json)
+    
+    # Ensure symbol/timeframe are not None for the record
+    if symbol is None or timeframe is None:
+         # This should theoretically not happen if logic is correct
+         LOGGER.warning("Loaded record has missing symbol/timeframe")
+         return None
+
     return StrategyRecord(
         strategy=strategy,
         study=study,

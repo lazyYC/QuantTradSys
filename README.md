@@ -46,10 +46,11 @@ python scripts/backfill_ohlcv.py BTC/USDT:USDT 5m 365 ^
 ```powershell
 python scripts/train.py ^
     --strategy star_xgb ^
-    --study-name test3 ^
+    --study-name test ^
     --symbol BTC/USDT:USDT --timeframe 5m ^
     --lookback-days 360 --test-days 30 ^
     --n-trials 50 ^
+    --n-seeds 5 ^ # 每個 trial 會用幾個 seed 去訓練
     --storage sqlite:///storage/optuna_studies.db
 ```
 
@@ -77,7 +78,7 @@ python scripts/report.py ^
 
 ```powershell
 python scripts/run_scheduler.py ^
-    --strategy star_xgb --study test3 ^
+    --strategy star_xgb --study test ^
     --symbol BTC/USDT:USDT --timeframe 5m ^
     --lookback-days 60 ^
     --exchange binanceusdm
