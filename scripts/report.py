@@ -104,7 +104,8 @@ def main() -> None:
         # Run backtest via Strategy Interface
         # Note: backtest might return different things depending on strategy
         # But we expect a result object with trades, metrics, equity
-        result = strategy.backtest(candles, params)
+        model_path = params_record.model_path if params_record else None
+        result = strategy.backtest(candles, params, model_path=model_path)
         
         # Normalize result
         # Assuming result has .trades (DataFrame), .metrics (Dict), .equity_curve (DataFrame)

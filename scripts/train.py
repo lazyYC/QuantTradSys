@@ -134,6 +134,16 @@ def main() -> None:
         
         run_id = datetime.now(timezone.utc).isoformat()
         
+        # Inject training artifacts into params for backtest and persistence
+        if hasattr(result, "feature_stats"):
+            best_params["feature_stats"] = result.feature_stats
+        if hasattr(result, "feature_columns"):
+            best_params["feature_columns"] = result.feature_columns
+        if hasattr(result, "class_means"):
+            best_params["class_means"] = result.class_means
+        if hasattr(result, "class_thresholds"):
+            best_params["class_thresholds"] = result.class_thresholds
+
         # Save Params
         metrics_to_save = {}
         if hasattr(result, "test_metrics"):
@@ -158,23 +168,6 @@ def main() -> None:
             stop_loss_pct=config.get("stop_loss_pct", 0.005),
             transaction_cost=config.get("transaction_cost", 0.001),
         )
-        
-        # Save Trades (Generic Backtest)
-        # We call strategy.backtest() which should handle data preparation internally or we pass raw data.
-        # BaseStrategy.backtest(raw_data, params, model_path)
-        
-        # Note: Some strategies might need model_path from result
-        # model_path_str is already extracted above
-            
-        # Inject training artifacts into params for backtest
-        if hasattr(result, "feature_stats"):
-            best_params["feature_stats"] = result.feature_stats
-        if hasattr(result, "feature_columns"):
-            best_params["feature_columns"] = result.feature_columns
-        if hasattr(result, "class_means"):
-            best_params["class_means"] = result.class_means
-        if hasattr(result, "class_thresholds"):
-            best_params["class_thresholds"] = result.class_thresholds
             
         # Run Backtest on Test Set (or specific split if we had logic for it)
         # For now we run on the whole cleaned_df but we should ideally split it or use the result's test set
