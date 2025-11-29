@@ -31,7 +31,7 @@ from data_pipeline.ccxt_fetcher import (
 from notifier.dispatcher import dispatch_signal
 from persistence.param_store import load_strategy_params
 from persistence.runtime_store import load_runtime_state, save_runtime_state
-from strategies.data_utils import prepare_ohlcv_frame, timeframe_to_offset
+from utils.data_utils import prepare_ohlcv_frame, timeframe_to_offset
 from strategies.star_xgb.features import StarFeatureCache
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
 from strategies.star_xgb.runtime import (

@@ -20,7 +20,7 @@ from persistence.trade_store import (
     prune_strategy_trades,
     save_trades,
 )
-from strategies.data_utils import prepare_ohlcv_frame
+from utils.data_utils import prepare_ohlcv_frame
 from strategies.star_xgb.backtest import backtest_star_xgb, StarBacktestResult
 from strategies.star_xgb.dataset import (
     TARGET_COLUMN,
