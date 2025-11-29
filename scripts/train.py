@@ -20,7 +20,7 @@ from _setup import DEFAULT_STATE_DB
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from optimization.engine import optimize_strategy
 from strategies.base import BaseStrategy
-from strategies.data_utils import prepare_ohlcv_frame
+from utils.data_utils import prepare_ohlcv_frame
 from strategies.loader import load_strategy_class
 from utils.symbols import canonicalize_symbol
 
@@ -67,12 +67,12 @@ def main() -> None:
         "future_window": args.future_window,
         "future_return_threshold": args.future_return_threshold,
         "valid_days": args.test_days,
-        "transaction_cost": 0.001,
-        "stop_loss_pct": 0.005,
+        "transaction_cost": args.transaction_cost,
+        "stop_loss_pct": args.stop_loss_pct,
         "use_gpu": args.use_gpu,
     }
     
-    LOGGER.info(f"Starting optimization for {args.strategy} with fixed target: future_window={args.future_window}")
+    LOGGER.info(f"Starting optimization for {args.strategy} with config: {config}")
     
     # 5. Run Optimization
     study = optimize_strategy(
@@ -174,7 +174,7 @@ def main() -> None:
         # based on args.test_days and save them as separate datasets.
         
         # Split data for recording
-        # from strategies.data_utils import split_train_test # Unused
+        # from utils.data_utils import split_train_test # Unused
         
         # Split data for recording based on user requirement:
         # Test: Last 30 days (Day 331-360)
@@ -258,10 +258,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--timeframe", type=str, default="5m")
     parser.add_argument("--lookback-days", type=int, default=360)
     parser.add_argument("--exchange", type=str, default="binanceusdm")
+    parser.add_argument("--transaction-cost", type=float, default=0.001)
+    parser.add_argument("--stop-loss-pct", type=float, default=0.005)
+    parser.add_argument("--valid-days", type=int, default=30)
     
     # Target Definition (Fixed)
     parser.add_argument("--future-window", type=int, default=5, help="Fixed prediction horizon (bars)")
-    parser.add_argument("--future-return-threshold", type=float, default=0.001, help="Fixed return threshold")
+    parser.add_argument("--future-return-threshold", type=float, default=0, help="Fixed return threshold")
     
     # Optimization Config
     parser.add_argument("--n-trials", type=int, default=10)
