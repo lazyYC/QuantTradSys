@@ -17,15 +17,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 # 2. Load .env from Project Root
-# Try to use python-dotenv if available
 try:
     from dotenv import load_dotenv
     env_path = ROOT_DIR / ".env"
     if env_path.exists():
         load_dotenv(env_path)
-        # logging.getLogger(__name__).info(f"Loaded .env from {env_path}")
+        logging.getLogger(__name__).info(f"Loaded .env from {env_path}")
 except ImportError:
-    # logging.getLogger(__name__).warning("python-dotenv not installed, skipping .env loading")
+    logging.getLogger(__name__).warning("python-dotenv not installed, skipping .env loading")
     pass
 
 # 3. Common Constants
@@ -40,9 +39,7 @@ def setup_logging(log_path: Path | None = None, level: int = logging.INFO) -> No
     if log_path:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         from logging.handlers import RotatingFileHandler
-        file_handler = RotatingFileHandler(
-            log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
-        )
+        file_handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
         handlers.append(file_handler)
         
     logging.basicConfig(
