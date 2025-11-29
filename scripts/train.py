@@ -108,7 +108,8 @@ def main() -> None:
     if args.model_dir:
         model_dir = args.model_dir
     else:
-        model_dir = Path(f"storage/models/{args.strategy}")
+        # Include study_name in model_dir to avoid collisions
+        model_dir = Path(f"storage/models/{args.strategy}/{args.study_name}")
     
     model_dir.mkdir(parents=True, exist_ok=True)
     
@@ -140,6 +141,11 @@ def main() -> None:
         elif hasattr(result, "validation_metrics"):
              metrics_to_save = result.validation_metrics
              
+        # Get model path if available
+        model_path_str = None
+        if hasattr(result, "model_path"):
+            model_path_str = str(result.model_path)
+             
         save_strategy_params(
             args.store_path,
             strategy=args.strategy,
@@ -148,6 +154,7 @@ def main() -> None:
             timeframe=args.timeframe,
             params=study.best_params,
             metrics=format_metrics(metrics_to_save),
+            model_path=model_path_str,
             stop_loss_pct=config.get("stop_loss_pct", 0.005),
             transaction_cost=config.get("transaction_cost", 0.001),
         )
@@ -157,9 +164,7 @@ def main() -> None:
         # BaseStrategy.backtest(raw_data, params, model_path)
         
         # Note: Some strategies might need model_path from result
-        model_path_str = None
-        if hasattr(result, "model_path"):
-            model_path_str = str(result.model_path)
+        # model_path_str is already extracted above
             
         # Inject training artifacts into params for backtest
         if hasattr(result, "feature_stats"):
