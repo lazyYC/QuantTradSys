@@ -152,7 +152,7 @@ def main() -> None:
             study=args.study_name,
             symbol=args.symbol,
             timeframe=args.timeframe,
-            params=study.best_params,
+            params=best_params,
             metrics=format_metrics(metrics_to_save),
             model_path=model_path_str,
             stop_loss_pct=config.get("stop_loss_pct", 0.005),
