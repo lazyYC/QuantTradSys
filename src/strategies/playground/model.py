@@ -1,0 +1,745 @@
+"""star_xgb 策略的模型訓練與評估。"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+from sklearn.metrics import accuracy_score, mean_absolute_error
+
+from .dataset import (
+    SAMPLE_WEIGHT_COLUMN,
+    TARGET_COLUMN,
+    apply_trade_amount_scaling,
+    compute_trade_amount_stats,
+    list_feature_columns,
+)
+from .labels import RETURN_CLASSES
+from .params import StarIndicatorParams, StarModelParams
+
+CLASS_VALUES = np.array(RETURN_CLASSES, dtype=float)
+NUM_CLASSES = len(CLASS_VALUES)
+
+
+@dataclass
+class StarTrainingResult:
+    indicator_params: StarIndicatorParams
+    model_params: StarModelParams
+    train_metrics: Dict[str, float]
+    validation_metrics: Dict[str, float]
+    test_metrics: Dict[str, float]
+    model_path: Path
+    feature_columns: List[str]
+    rankings: List[Dict[str, object]]
+    class_means: List[float]
+    class_thresholds: Dict[str, float]
+    feature_stats: Dict[str, Dict[str, float]]
+
+
+def train_star_model(
+    dataset: pd.DataFrame,
+    indicator_params: StarIndicatorParams,
+    model_candidates: Iterable[StarModelParams],
+    *,
+    model_dir: Path,
+    valid_dataset: Optional[pd.DataFrame] = None,
+    valid_days: int = 30,
+    transaction_cost: float = 0.0,
+    min_validation_days: int = 30,
+    stop_loss_pct: Optional[float] = None,
+    use_gpu: bool = False,
+    seed: Optional[int] = None,
+    deterministic: bool = True,
+    use_vectorized_metrics: bool = False,
+) -> StarTrainingResult:
+    """針對單一指標參數搜尋最佳模型。"""
+    if dataset.empty:
+        raise ValueError("提供的資料集為空，無法訓練模型")
+
+    if valid_dataset is not None:
+        train_df_raw = dataset.copy()
+        valid_df_raw = valid_dataset.copy()
+    elif valid_days <= 0:
+        train_df_raw = dataset.copy()
+        valid_df_raw = pd.DataFrame(columns=dataset.columns)
+    else:
+        validation_window = max(valid_days, min_validation_days)
+        train_df_raw, valid_df_raw = _split_train_valid(
+            dataset, valid_days=validation_window
+        )
+        if train_df_raw.empty:
+            train_df_raw = dataset.copy()
+            valid_df_raw = pd.DataFrame(columns=dataset.columns)
+
+    trade_amount_stats = compute_trade_amount_stats(train_df_raw)
+    prepared_dataset = apply_trade_amount_scaling(dataset, trade_amount_stats)
+    dataset = prepared_dataset
+    train_df = apply_trade_amount_scaling(train_df_raw, trade_amount_stats)
+    valid_df = apply_trade_amount_scaling(valid_df_raw, trade_amount_stats)
+
+    feature_cols = list_feature_columns(prepared_dataset)
+    if not feature_cols:
+        raise ValueError("沒有可用的特徵欄位，無法訓練模型")
+
+    class_means = _compute_class_means(
+        train_df if not train_df.empty else prepared_dataset
+    )
+
+    rankings: List[Dict[str, object]] = []
+    best_tuple: (
+        Tuple[StarModelParams, Dict[str, float], lgb.LGBMClassifier, np.ndarray] | None
+    ) = None
+
+    for model_params in model_candidates:
+        model = _init_model(
+            model_params,
+            device="gpu" if use_gpu else "cpu",
+            seed=seed,
+            deterministic=deterministic,
+        )
+        fitted_model, val_probs = _fit_model(model, train_df, valid_df, feature_cols)
+        val_target_df = valid_df if not valid_df.empty else train_df
+        
+        if use_vectorized_metrics:
+            metrics = _evaluate_vectorized(
+                val_target_df,
+                val_probs,
+                model_params,
+                class_means,
+                transaction_cost=transaction_cost,
+            )
+        else:
+            metrics = _evaluate(
+                val_target_df,
+                val_probs,
+                model_params,
+                class_means,
+                transaction_cost=transaction_cost,
+                stop_loss_pct=stop_loss_pct,
+                min_hold_bars=indicator_params.future_window,
+            )
+        score = _score_metric(metrics)
+        record = {
+            "indicator_params": indicator_params.as_dict(rounded=True),
+            "model_params": model_params.as_dict(rounded=True),
+            "metrics": metrics,
+            "score": score,
+        }
+        rankings.append(record)
+        if best_tuple is None or score > best_tuple[1]["score"]:
+            record_with_score = metrics.copy()
+            record_with_score["score"] = score
+            best_tuple = (model_params, record_with_score, fitted_model, val_probs)
+
+    if best_tuple is None:
+        raise ValueError("模型搜尋失敗，無任何有效結果")
+
+    best_model_params, best_metrics, _, _ = best_tuple
+    rankings.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+
+    final_model = _init_model(best_model_params)
+    final_model.fit(
+        train_df[feature_cols],
+        train_df[TARGET_COLUMN],
+        sample_weight=train_df[SAMPLE_WEIGHT_COLUMN],
+        eval_set=None,
+    )
+    train_probs = (
+        final_model.predict_proba(train_df[feature_cols])
+        if not train_df.empty
+        else np.empty((0, NUM_CLASSES))
+    )
+    if not train_df.empty and train_probs.size:
+        train_expected = _expected_returns(train_probs, class_means)
+        train_pred_classes = CLASS_VALUES[np.argmax(train_probs, axis=1)]
+        train_trades = _simulate_trades(
+            train_df,
+            train_expected,
+            train_pred_classes,
+            best_model_params,
+            transaction_cost=transaction_cost,
+            stop_loss_pct=stop_loss_pct,
+            min_hold_bars=indicator_params.future_window,
+        )
+        class_means = _calibrate_class_means(class_means, train_trades)
+    train_metrics = _evaluate(
+        train_df,
+        train_probs,
+        best_model_params,
+        class_means,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
+    )
+    valid_probs = (
+        final_model.predict_proba(valid_df[feature_cols])
+        if not valid_df.empty
+        else np.empty((0, NUM_CLASSES))
+    )
+    test_metrics = _evaluate(
+        valid_df,
+        valid_probs,
+        best_model_params,
+        class_means,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
+        min_hold_bars=indicator_params.future_window,
+    )
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_filename = (
+        f"star_xgb_{indicator_params.trend_window}_{best_model_params.num_leaves}.txt"
+    )
+    model_path = model_dir / model_filename
+    final_model.booster_.save_model(str(model_path))
+
+    threshold_source = train_df if not train_df.empty else prepared_dataset
+    class_thresholds = {
+        "q10": float(threshold_source["q10"].iloc[0])
+        if "q10" in threshold_source.columns and not threshold_source.empty
+        else 0.0,
+        "q25": float(threshold_source["q25"].iloc[0])
+        if "q25" in threshold_source.columns and not threshold_source.empty
+        else 0.0,
+        "q75": float(threshold_source["q75"].iloc[0])
+        if "q75" in threshold_source.columns and not threshold_source.empty
+        else 0.0,
+        "q90": float(threshold_source["q90"].iloc[0])
+        if "q90" in threshold_source.columns and not threshold_source.empty
+        else 0.0,
+    }
+
+    result = StarTrainingResult(
+        indicator_params=indicator_params,
+        model_params=best_model_params,
+        train_metrics=train_metrics,
+        validation_metrics=best_metrics,
+        test_metrics=test_metrics,
+        model_path=model_path,
+        feature_columns=feature_cols,
+        rankings=rankings,
+        class_means=class_means.tolist(),
+        class_thresholds=class_thresholds,
+        feature_stats={"trade_amount": trade_amount_stats},
+    )
+    return result
+
+
+def export_rankings(rankings: Sequence[Dict[str, object]], path: Path) -> Path:
+    """將搜尋排名寫入 JSON，方便報表閱讀。"""
+    data = [
+        {
+            "indicator_params": item.get("indicator_params"),
+            "model_params": item.get("model_params"),
+            "metrics": item.get("metrics"),
+            "score": item.get("score"),
+        }
+        for item in rankings
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _simulate_trades(
+    df: pd.DataFrame,
+    expected_returns: np.ndarray,
+    pred_classes: np.ndarray,
+    params: StarModelParams,
+    *,
+    transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = None,
+    min_hold_bars: int = 0,
+) -> pd.DataFrame:
+    """依據預測類別與預期報酬模擬交易，回傳完整交易表。"""
+    trade_columns = [
+        "side",
+        "entry_time",
+        "exit_time",
+        "entry_price",
+        "exit_price",
+        "return",
+        "holding_mins",
+        "entry_expected_return",
+        "exit_expected_return",
+        "entry_class",
+        "exit_class",
+        "exit_reason",
+        "entry_zscore",
+        "exit_zscore",
+    ]
+    if df.empty:
+        return pd.DataFrame(columns=trade_columns)
+
+    frame = df.copy()
+    frame = frame.sort_values("timestamp").reset_index(drop=True)
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    frame["expected_return_sim"] = expected_returns
+    frame["predicted_class_sim"] = pred_classes
+    frame = frame.dropna(
+        subset=["timestamp", "close", "expected_return_sim", "predicted_class_sim"]
+    )
+
+    threshold = float(params.decision_threshold)
+    open_trade: Optional[Dict[str, object]] = None
+    records: List[Dict[str, object]] = []
+    min_hold = max(int(min_hold_bars), 0)
+
+    for idx, row in enumerate(frame.itertuples(index=False), start=0):
+        ts: pd.Timestamp = row.timestamp
+        close_price = float(row.close)
+        predicted_class = float(row.predicted_class_sim)
+        expected_ret = float(row.expected_return_sim)
+
+        if open_trade is not None:
+            side = open_trade["side"]
+            exit_signal = False
+            stop_triggered = False
+            if stop_loss_pct is not None and stop_loss_pct > 0.0:
+                entry_price = open_trade["entry_price"]
+                if side == "LONG":
+                    unrealized = (close_price - entry_price) / entry_price
+                else:
+                    unrealized = (entry_price - close_price) / entry_price
+                if unrealized <= -stop_loss_pct:
+                    stop_triggered = True
+
+            can_exit_by_signal = idx >= open_trade["min_exit_idx"]
+            if can_exit_by_signal:
+                if side == "LONG":
+                    exit_signal = predicted_class in {0.0, -1.0, -2.0}
+                elif side == "SHORT":
+                    exit_signal = predicted_class in {0.0, 1.0, 2.0}
+
+            if stop_triggered or exit_signal:
+                entry_price = open_trade["entry_price"]
+                if side == "LONG":
+                    ret = (close_price - entry_price) / entry_price
+                else:
+                    ret = (entry_price - close_price) / entry_price
+                if transaction_cost:
+                    ret -= transaction_cost
+                holding_minutes = max(
+                    (ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0
+                )
+                records.append(
+                    {
+                        "side": side,
+                        "entry_time": open_trade["entry_time"],
+                        "exit_time": ts,
+                        "entry_price": entry_price,
+                        "exit_price": close_price,
+                        "return": ret,
+                        "holding_mins": holding_minutes,
+                        "entry_expected_return": open_trade["entry_expected_return"],
+                        "exit_expected_return": expected_ret,
+                        "entry_class": open_trade["entry_class"],
+                        "exit_class": predicted_class,
+                        "exit_reason": "stop_loss"
+                        if stop_triggered
+                        else "signal_reversal",
+                        "entry_zscore": open_trade.get(
+                            "entry_zscore", open_trade["entry_expected_return"]
+                        ),
+                        "exit_zscore": expected_ret,
+                    }
+                )
+                open_trade = None
+                if stop_triggered:
+                    continue
+
+        if open_trade is None and expected_ret >= threshold:
+            if predicted_class == 2.0:
+                open_trade = {
+                    "side": "LONG",
+                    "entry_time": ts,
+                    "entry_price": close_price,
+                    "entry_expected_return": expected_ret,
+                    "entry_idx": idx,
+                    "min_exit_idx": idx + min_hold,
+                    "entry_class": predicted_class,
+                    "entry_zscore": expected_ret,
+                }
+            elif predicted_class == -2.0:
+                open_trade = {
+                    "side": "SHORT",
+                    "entry_time": ts,
+                    "entry_price": close_price,
+                    "entry_expected_return": expected_ret,
+                    "entry_idx": idx,
+                    "min_exit_idx": idx + min_hold,
+                    "entry_class": predicted_class,
+                    "entry_zscore": expected_ret,
+                }
+
+    if open_trade is not None:
+        # 在資料結尾強制平倉，避免遺留持倉
+        last_row = frame.iloc[-1]
+        last_ts: pd.Timestamp = last_row["timestamp"]
+        last_price = float(last_row["close"])
+        side = open_trade["side"]
+        if side == "LONG":
+            ret = (last_price - open_trade["entry_price"]) / open_trade["entry_price"]
+        else:
+            ret = (open_trade["entry_price"] - last_price) / open_trade["entry_price"]
+        if transaction_cost:
+            ret -= transaction_cost
+        holding_minutes = max(
+            (last_ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0
+        )
+        records.append(
+            {
+                "side": side,
+                "entry_time": open_trade["entry_time"],
+                "exit_time": last_ts,
+                "entry_price": open_trade["entry_price"],
+                "exit_price": last_price,
+                "return": ret,
+                "holding_mins": holding_minutes,
+                "entry_expected_return": open_trade["entry_expected_return"],
+                "exit_expected_return": float(last_row["expected_return_sim"]),
+                "entry_class": open_trade["entry_class"],
+                "exit_class": float(last_row["predicted_class_sim"]),
+                "exit_reason": "end_of_data",
+                "entry_zscore": open_trade.get(
+                    "entry_zscore", open_trade["entry_expected_return"]
+                ),
+                "exit_zscore": float(last_row["expected_return_sim"]),
+            }
+        )
+
+    trades = pd.DataFrame.from_records(records, columns=trade_columns)
+    if trades.empty:
+        return trades
+
+    trades["entry_zscore"] = trades["entry_zscore"].fillna(0.0)
+    trades["exit_zscore"] = trades["exit_zscore"].fillna(0.0)
+    return trades
+
+
+def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
+    """從交易表計算關鍵統計，所有報酬以幾何方式累積。"""
+    summary: Dict[str, float] = {
+        "trades": 0.0,
+        "total_return": 0.0,
+        "avg_return": 0.0,
+        "win_rate": 0.0,
+        "max_drawdown": 0.0,
+        "short_trades": 0.0,
+        "long_trades": 0.0,
+        "short_total_return": 0.0,
+        "long_total_return": 0.0,
+        "short_win_rate": 0.0,
+        "long_win_rate": 0.0,
+        "mean_expected_short": 0.0,
+        "mean_expected_long": 0.0,
+        "short_avg_best_return": 0.0,
+        "long_avg_best_return": 0.0,
+    }
+
+    if trades.empty:
+        return summary
+
+    returns = pd.to_numeric(trades["return"], errors="coerce").dropna()
+    if returns.empty:
+        return summary
+
+    equity = (1.0 + returns).cumprod()
+    total_return = float(equity.iloc[-1] - 1.0)
+    drawdown = equity / equity.cummax() - 1.0
+
+    summary.update(
+        {
+            "trades": float(len(returns)),
+            "total_return": total_return,
+            "avg_return": float(returns.mean()),
+            "win_rate": float((returns > 0).mean()),
+            "max_drawdown": float(abs(drawdown.min())),
+        }
+    )
+
+    for side, key in (("SHORT", "short"), ("LONG", "long")):
+        mask = trades["side"] == side
+        side_returns = pd.to_numeric(
+            trades.loc[mask, "return"], errors="coerce"
+        ).dropna()
+        if not side_returns.empty:
+            summary[f"{key}_trades"] = float(len(side_returns))
+            summary[f"{key}_total_return"] = float(np.prod(1.0 + side_returns) - 1.0)
+            summary[f"{key}_win_rate"] = float((side_returns > 0).mean())
+            expected_series = pd.to_numeric(
+                trades.loc[mask, "entry_expected_return"], errors="coerce"
+            ).dropna()
+            summary[f"mean_expected_{key}"] = (
+                float(expected_series.mean()) if not expected_series.empty else 0.0
+            )
+        else:
+            summary[f"{key}_trades"] = 0.0
+            summary[f"{key}_total_return"] = 0.0
+            summary[f"{key}_win_rate"] = 0.0
+            summary[f"mean_expected_{key}"] = 0.0
+
+    return summary
+
+
+def _split_train_valid(
+    train_df: pd.DataFrame, valid_days: int = 30
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if train_df.empty:
+        return train_df.copy(), train_df.copy()
+    cutoff = train_df["timestamp"].max() - pd.Timedelta(days=valid_days)
+    valid = train_df[train_df["timestamp"] > cutoff].copy()
+    base = train_df[train_df["timestamp"] <= cutoff].copy()
+    if valid.empty or base.empty:
+        split_idx = max(int(len(train_df) * 0.8), 1)
+        base = train_df.iloc[:split_idx].copy()
+        valid = train_df.iloc[split_idx:].copy()
+    return base.reset_index(drop=True), valid.reset_index(drop=True)
+
+
+def _init_model(
+    params: StarModelParams,
+    *,
+    device: str = "cpu",
+    seed: Optional[int] = None,
+    deterministic: bool = True,
+) -> lgb.LGBMClassifier:
+    seed_val = 88 if seed is None else seed
+    return lgb.LGBMClassifier(
+        objective="multiclass",
+        boosting_type="gbdt",
+        num_leaves=params.num_leaves,
+        max_depth=params.max_depth,
+        learning_rate=params.learning_rate,
+        n_estimators=params.n_estimators,
+        min_child_samples=params.min_child_samples,
+        subsample=params.subsample,
+        colsample_bytree=params.colsample_bytree,
+        feature_fraction_bynode=params.feature_fraction_bynode,
+        reg_alpha=params.lambda_l1,
+        reg_lambda=params.lambda_l2,
+        bagging_freq=params.bagging_freq,
+        num_class=NUM_CLASSES,
+        n_jobs=-1,
+        verbosity=-1,
+        random_state=seed_val,
+        bagging_seed=seed_val,
+        feature_fraction_seed=seed_val,
+        deterministic=deterministic,
+        device=device,
+    )
+
+
+def _fit_model(
+    model: lgb.LGBMClassifier,
+    train_df: pd.DataFrame,
+    valid_df: pd.DataFrame,
+    feature_cols: Sequence[str],
+) -> Tuple[lgb.LGBMClassifier, np.ndarray]:
+    eval_set = None
+    eval_sample_weight = None
+    callbacks = []
+    if not valid_df.empty:
+        eval_set = [(valid_df[feature_cols], valid_df[TARGET_COLUMN])]
+        eval_sample_weight = [valid_df[SAMPLE_WEIGHT_COLUMN]]
+        callbacks.append(lgb.early_stopping(stopping_rounds=50, verbose=False))
+    model.fit(
+        train_df[feature_cols],
+        train_df[TARGET_COLUMN],
+        sample_weight=train_df[SAMPLE_WEIGHT_COLUMN],
+        eval_set=eval_set,
+        eval_sample_weight=eval_sample_weight,
+        eval_metric="multi_logloss",
+        callbacks=callbacks,
+    )
+    target_df = valid_df if not valid_df.empty else train_df
+    probs = model.predict_proba(target_df[feature_cols])
+    return model, probs
+
+
+def _expected_returns(probs: np.ndarray, class_means: np.ndarray) -> np.ndarray:
+    if probs.ndim == 1:
+        probs = probs.reshape(1, -1)
+    return probs @ class_means
+
+
+def _evaluate(
+    df: pd.DataFrame,
+    probs: np.ndarray,
+    params: StarModelParams,
+    class_means: np.ndarray,
+    *,
+    transaction_cost: float = 0.0,
+    stop_loss_pct: Optional[float] = None,
+    min_hold_bars: int = 0,
+) -> Dict[str, float]:
+    if df.empty:
+        metrics = {
+            "accuracy": 0.0,
+            "mae_expected": 0.0,
+            "threshold": float(params.decision_threshold),
+        }
+        metrics.update(_summarize_trades(pd.DataFrame()))
+        metrics["score"] = 0.0
+        return metrics
+
+    expected_returns = _expected_returns(probs, class_means)
+    preds_idx = np.argmax(probs, axis=1)
+    pred_classes = CLASS_VALUES[preds_idx]
+    y_true = df[TARGET_COLUMN].to_numpy()
+    accuracy = float(accuracy_score(y_true, pred_classes))
+    mae_expected = float(
+        mean_absolute_error(df["future_short_return"], expected_returns)
+    )
+
+    trades = _simulate_trades(
+        df,
+        expected_returns,
+        pred_classes,
+        params,
+        transaction_cost=transaction_cost,
+        stop_loss_pct=stop_loss_pct,
+        min_hold_bars=min_hold_bars,
+    )
+    summary = _summarize_trades(trades)
+
+    metrics = {
+        "accuracy": accuracy,
+        "mae_expected": mae_expected,
+        "threshold": float(params.decision_threshold),
+    }
+    metrics.update(summary)
+    metrics["score"] = metrics.get("total_return", 0.0)
+    return metrics
+
+
+def _evaluate_vectorized(
+    df: pd.DataFrame,
+    probs: np.ndarray,
+    params: StarModelParams,
+    class_means: np.ndarray,
+    *,
+    transaction_cost: float = 0.0,
+) -> Dict[str, float]:
+    """
+    Vectorized evaluation for random splits where path dependency is broken.
+    Uses pre-calculated future_long_return / future_short_return.
+    """
+    if df.empty:
+        return {"score": 0.0, "total_return": 0.0, "trades": 0.0}
+
+    expected_returns = _expected_returns(probs, class_means)
+    preds_idx = np.argmax(probs, axis=1)
+    pred_classes = CLASS_VALUES[preds_idx]
+    
+    # Vectorized PnL calculation
+    # If pred=2 (Long) -> future_long_return
+    # If pred=-2 (Short) -> future_short_return
+    # Else 0
+    
+    threshold = float(params.decision_threshold)
+    
+    # Filter by threshold
+    # Note: In _simulate_trades, we only open if expected_ret >= threshold
+    # Here we approximate: if abs(expected_ret) >= threshold? 
+    # Or just rely on class prediction? 
+    # _simulate_trades logic: if expected_ret >= threshold: check class.
+    
+    # Let's match _simulate_trades logic roughly
+    mask_long = (pred_classes == 2.0) & (expected_returns >= threshold)
+    mask_short = (pred_classes == -2.0) & (expected_returns >= threshold)
+    
+    pnl = np.zeros(len(df))
+    
+    # Long returns
+    if mask_long.any():
+        pnl[mask_long] = df.loc[mask_long, "future_long_return"].fillna(0.0) - transaction_cost
+        
+    # Short returns
+    if mask_short.any():
+        pnl[mask_short] = df.loc[mask_short, "future_short_return"].fillna(0.0) - transaction_cost
+        
+    # Total Return (Geometric)
+    # 1 + r1 * 1 + r2 ... - 1
+    total_return = np.prod(1.0 + pnl) - 1.0
+    
+    trades_count = mask_long.sum() + mask_short.sum()
+    win_rate = (pnl > 0).mean() if trades_count > 0 else 0.0
+    
+    return {
+        "score": float(total_return),
+        "total_return": float(total_return),
+        "trades": float(trades_count),
+        "win_rate": float(win_rate),
+        "avg_return": float(pnl[pnl != 0].mean()) if trades_count > 0 else 0.0,
+        "threshold": threshold,
+    }
+
+
+def _score_metric(metrics: Dict[str, float]) -> float:
+    return float(metrics.get("total_return", 0.0))
+
+
+def _compute_class_means(train_df: pd.DataFrame) -> np.ndarray:
+    """依據多空類別計算對應的期望報酬均值。"""
+    short_means = train_df.groupby(TARGET_COLUMN)["future_short_return"].mean()
+    long_means = train_df.groupby(TARGET_COLUMN)["future_long_return"].mean()
+    class_means: list[float] = []
+    for label in CLASS_VALUES:
+        if label < 0:
+            value = short_means.get(label, 0.0)
+        elif label > 0:
+            value = long_means.get(label, 0.0)
+        else:
+            value = 0.0
+        class_means.append(float(0.0 if pd.isna(value) else value))
+    return np.asarray(class_means, dtype=float)
+
+def _calibrate_class_means(
+    base_means: np.ndarray,
+    trades: pd.DataFrame,
+    *,
+    smoothing: float = 0.2,
+) -> np.ndarray:
+    """利用模擬交易的平均報酬，平滑調整 class_means 但保留原本量級。"""
+    if (
+        trades.empty
+        or "entry_class" not in trades
+        or "return" not in trades
+        or smoothing <= 0.0
+    ):
+        return base_means
+
+    calibrated = base_means.astype(float, copy=True)
+    returns = pd.to_numeric(trades["return"], errors="coerce")
+    classes = pd.to_numeric(trades["entry_class"], errors="coerce")
+
+    smooth = min(max(smoothing, 0.0), 1.0)
+    for idx, label in enumerate(CLASS_VALUES):
+        mask = classes == label
+        if not mask.any():
+            continue
+        mean_return = returns[mask].mean()
+        if pd.isna(mean_return):
+            continue
+
+        base_value = calibrated[idx]
+        # 只在方向一致時進行平滑，避免意外顛倒多空判斷
+        if base_value == 0.0 or np.sign(base_value) == np.sign(mean_return):
+            calibrated[idx] = float((1.0 - smooth) * base_value + smooth * mean_return)
+
+    return calibrated
+
+__all__ = [
+    "StarTrainingResult",
+    "train_star_model",
+    "export_rankings",
+    "CLASS_VALUES",
+    "_simulate_trades",
+    "_summarize_trades",
+]
