@@ -286,6 +286,7 @@ def optimize_playground(
         core_start=train_core_start,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        use_vectorized_metrics=True, # Random split
     )
 
     valid_bt_result = backtest_star_xgb(
@@ -301,6 +302,7 @@ def optimize_playground(
         core_start=validation_start,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
+        use_vectorized_metrics=True, # Random split
     )
 
     test_bt_result = backtest_star_xgb(
