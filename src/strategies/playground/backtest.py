@@ -57,6 +57,9 @@ def backtest_star_xgb(
         )
 
     cache = StarFeatureCache(
+        ohlcv,
+        trend_windows=[indicator_params.trend_window],
+        atr_windows=[indicator_params.atr_window],
         volatility_windows=[indicator_params.volatility_window],
         volume_windows=[indicator_params.volume_window],
         pattern_windows=[indicator_params.pattern_lookback],
