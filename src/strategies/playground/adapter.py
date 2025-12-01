@@ -36,10 +36,10 @@ class PlaygroundStrategy(BaseStrategy):
         """
         # Hardcoded search space for now, or could be passed in config.
         # These match the ranges in get_optuna_params
-        trend_windows = [45, 60, 75]
-        slope_windows = [5, 10] # Not used in cache init, but used in build_features
-        atr_windows = [14, 21, 28]
-        volatility_windows = [15, 20, 30]
+        trend_windows = list(range(30, 65, 5))
+        slope_windows = list(range(5, 20, 5))
+        atr_windows = list(range(14, 35, 7))
+        volatility_windows = list(range(15, 35, 5))
         volume_windows = [30, 45, 60]
         pattern_windows = [3, 4, 5]
         

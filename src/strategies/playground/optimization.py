@@ -111,11 +111,11 @@ def optimize_playground(
 
         cache = StarFeatureCache(
             train_df,
-            trend_windows=[indicator_params.trend_window],
-            atr_windows=[indicator_params.atr_window],
-            volatility_windows=[indicator_params.volatility_window],
-            volume_windows=[indicator_params.volume_window],
-            pattern_windows=[indicator_params.pattern_lookback],
+            trend_windows=list(range(30, 65, 5)),
+            atr_windows=list(range(14, 35, 7)),
+            volatility_windows=list(range(15, 35, 5)),
+            volume_windows=[30, 45, 60],
+            pattern_windows=[3, 4, 5],
         )
         features = cache.build_features(indicator_params)
         labels, thresholds = build_label_frame(features, indicator_params)
@@ -440,10 +440,10 @@ def suggest_indicator_params(
     If future_window_choices is provided, also suggest future_window and return_threshold (Legacy mode).
     """
     params = dict(
-        trend_window=trial.suggest_categorical("trend_window", [45, 60, 75]),
-        slope_window=trial.suggest_categorical("slope_window", [5, 10]),
-        atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
-        volatility_window=trial.suggest_categorical("volatility_window", [15, 20, 30]),
+        trend_window=trial.suggest_int("trend_window", 30, 60, step=5),
+        slope_window=trial.suggest_int("slope_window", 5, 15, step=5),
+        atr_window=trial.suggest_int("atr_window", 14, 28, step=7),
+        volatility_window=trial.suggest_int("volatility_window", 15, 30, step=5),
         volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
         pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
         upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
@@ -478,13 +478,9 @@ def suggest_model_params(trial: Trial) -> StarModelParams:
         min_child_samples=trial.suggest_int("min_child_samples", 5, 25, step=5),
         subsample=trial.suggest_float("subsample", 0.6, 0.9, step=0.05),
         colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 0.9, step=0.05),
-        feature_fraction_bynode=trial.suggest_float(
-            "feature_fraction_bynode", 0.6, 0.9, step=0.05
-        ),
+        feature_fraction_bynode=trial.suggest_float("feature_fraction_bynode", 0.6, 0.9, step=0.05),
         lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
-        decision_threshold=trial.suggest_float(
-            "decision_threshold", 0.004, 0.007, step=0.0001
-        ),
+        decision_threshold=trial.suggest_float("decision_threshold", 0.001, 0.020, step=0.001),
     )
