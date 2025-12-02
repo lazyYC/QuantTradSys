@@ -177,7 +177,8 @@ def backtest_star_xgb(
                     "holding_mins": 0,
                     "entry_zscore": 0,
                     "exit_zscore": 0,
-                    "exit_reason": "vectorized"
+                    "exit_reason": "vectorized",
+                    "entry_expected_return": expected_returns[idx],
                 })
             trades = pd.DataFrame(records)
         else:
