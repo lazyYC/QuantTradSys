@@ -482,5 +482,5 @@ def suggest_model_params(trial: Trial) -> StarModelParams:
         lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
-        decision_threshold=trial.suggest_float("decision_threshold", 0.001, 0.020, step=0.001),
+        decision_threshold=trial.suggest_float("decision_threshold", 0.001, 0.006, step=0.0005),
     )
