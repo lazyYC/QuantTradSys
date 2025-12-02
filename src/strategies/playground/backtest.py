@@ -160,21 +160,40 @@ def backtest_star_xgb(
         active_mask = mask_long | mask_short
         if active_mask.any():
             active_indices = np.where(active_mask)[0]
+            # Parse timeframe to timedelta
+            # Assuming timeframe is like "5m", "1h", "1d"
+            tf_unit = timeframe[-1]
+            tf_val = int(timeframe[:-1])
+            if tf_unit == "m":
+                delta = pd.Timedelta(minutes=tf_val)
+            elif tf_unit == "h":
+                delta = pd.Timedelta(hours=tf_val)
+            elif tf_unit == "d":
+                delta = pd.Timedelta(days=tf_val)
+            else:
+                delta = pd.Timedelta(minutes=5) # Fallback
+            
+            hold_duration = delta * indicator_params.future_window
+            holding_mins = hold_duration.total_seconds() / 60
+
             records = []
             for idx in active_indices:
                 row = dataset.iloc[idx]
                 side = "LONG" if mask_long[idx] else "SHORT"
                 ret = pnl[idx]
+                entry_time = row["timestamp"]
+                exit_time = entry_time + hold_duration
+                
                 records.append({
                     "run_id": "vectorized", # Dummy
                     "strategy": "playground", # Dummy
-                    "entry_time": row["timestamp"],
-                    "exit_time": row["timestamp"], # Instant exit for vectorized
+                    "entry_time": entry_time,
+                    "exit_time": exit_time,
                     "side": side,
                     "entry_price": row["close"],
-                    "exit_price": row["close"], # Dummy
+                    "exit_price": row["close"], # Dummy, we rely on return
                     "return": ret,
-                    "holding_mins": 0,
+                    "holding_mins": holding_mins,
                     "entry_zscore": 0,
                     "exit_zscore": 0,
                     "exit_reason": "vectorized",
