@@ -176,6 +176,7 @@ def execute_trading(
                 broker,
                 ratio=_load_order_ratio(broker.name),
                 max_notional=_load_max_notional(broker.name),
+                scale=context.get("scale", 1.0),
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available", broker_label)
@@ -201,33 +202,60 @@ def execute_trading(
                 f"order_symbol={order_symbol} notional={notional:.2f}"
             )
         elif action_upper == "EXIT_LONG":
-            try:
-                order_resp = broker.close_position(order_symbol, side="sell")
-            except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
-                message = f"Failed to close LONG position: {exc}"
-                return False, message
-            except BinanceAPIError as exc:
-                LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
-                message = f"Failed to close LONG position: {exc}"
-                return False, message
-            _attach_fill_price(context, order_resp, broker_name=broker.name)
-            LOGGER.info(
-                "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
-                broker_label,
-                symbol,
-                order_symbol,
-            )
-            success = True
-            message = (
-                f"Closed {broker_label} LONG position | feed_symbol={symbol} "
-                f"order_symbol={order_symbol}"
-            )
+            scale = context.get("scale")
+            if scale is not None:
+                # Partial Exit (Sell)
+                notional = _resolve_order_notional(
+                    broker,
+                    ratio=_load_order_ratio(broker.name),
+                    max_notional=_load_max_notional(broker.name),
+                    scale=float(scale),
+                )
+                if notional <= 0:
+                    LOGGER.warning("%s partial exit skipped: calculated notional is zero", broker_label)
+                    message = "Partial exit skipped (zero notional)"
+                    return False, message
+                
+                order_resp = broker.submit_market_order(
+                    symbol=order_symbol, side="sell", notional=notional
+                )
+                _attach_fill_price(context, order_resp, broker_name=broker.name)
+                LOGGER.info(
+                    "Submitted %s PARTIAL EXIT LONG (Sell) | feed_symbol=%s order_symbol=%s notional=%.2f scale=%.2f",
+                    broker_label, symbol, order_symbol, notional, float(scale)
+                )
+                success = True
+                message = f"Submitted {broker_label} PARTIAL EXIT LONG | scale={scale} notional={notional:.2f}"
+            else:
+                # Full Exit
+                try:
+                    order_resp = broker.close_position(order_symbol, side="sell")
+                except AlpacaAPIError as exc:
+                    LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
+                    message = f"Failed to close LONG position: {exc}"
+                    return False, message
+                except BinanceAPIError as exc:
+                    LOGGER.error("Failed to close %s LONG position for %s: %s", broker_label, symbol, exc)
+                    message = f"Failed to close LONG position: {exc}"
+                    return False, message
+                _attach_fill_price(context, order_resp, broker_name=broker.name)
+                LOGGER.info(
+                    "Closed %s LONG position | feed_symbol=%s order_symbol=%s",
+                    broker_label,
+                    symbol,
+                    order_symbol,
+                )
+                success = True
+                message = (
+                    f"Closed {broker_label} LONG position | feed_symbol={symbol} "
+                    f"order_symbol={order_symbol}"
+                )
         elif action_upper == "ENTER_SHORT":
             notional = _resolve_order_notional(
                 broker,
                 ratio=_load_order_ratio(broker.name),
                 max_notional=_load_max_notional(broker.name),
+                scale=context.get("scale", 1.0),
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available for short", broker_label)
@@ -253,28 +281,54 @@ def execute_trading(
                 f"order_symbol={order_symbol} notional={notional:.2f}"
             )
         elif action_upper == "EXIT_SHORT":
-            try:
-                order_resp = broker.close_position(order_symbol, side="buy")
-            except AlpacaAPIError as exc:
-                LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
-                message = f"Failed to close SHORT position: {exc}"
-                return False, message
-            except BinanceAPIError as exc:
-                LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
-                message = f"Failed to close SHORT position: {exc}"
-                return False, message
-            _attach_fill_price(context, order_resp, broker_name=broker.name)
-            LOGGER.info(
-                "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
-                broker_label,
-                symbol,
-                order_symbol,
-            )
-            success = True
-            message = (
-                f"Closed {broker_label} SHORT position | feed_symbol={symbol} "
-                f"order_symbol={order_symbol}"
-            )
+            scale = context.get("scale")
+            if scale is not None:
+                # Partial Exit (Buy)
+                notional = _resolve_order_notional(
+                    broker,
+                    ratio=_load_order_ratio(broker.name),
+                    max_notional=_load_max_notional(broker.name),
+                    scale=float(scale),
+                )
+                if notional <= 0:
+                    LOGGER.warning("%s partial exit skipped: calculated notional is zero", broker_label)
+                    message = "Partial exit skipped (zero notional)"
+                    return False, message
+                
+                order_resp = broker.submit_market_order(
+                    symbol=order_symbol, side="buy", notional=notional
+                )
+                _attach_fill_price(context, order_resp, broker_name=broker.name)
+                LOGGER.info(
+                    "Submitted %s PARTIAL EXIT SHORT (Buy) | feed_symbol=%s order_symbol=%s notional=%.2f scale=%.2f",
+                    broker_label, symbol, order_symbol, notional, float(scale)
+                )
+                success = True
+                message = f"Submitted {broker_label} PARTIAL EXIT SHORT | scale={scale} notional={notional:.2f}"
+            else:
+                # Full Exit
+                try:
+                    order_resp = broker.close_position(order_symbol, side="buy")
+                except AlpacaAPIError as exc:
+                    LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
+                    message = f"Failed to close SHORT position: {exc}"
+                    return False, message
+                except BinanceAPIError as exc:
+                    LOGGER.error("Failed to close %s SHORT position for %s: %s", broker_label, symbol, exc)
+                    message = f"Failed to close SHORT position: {exc}"
+                    return False, message
+                _attach_fill_price(context, order_resp, broker_name=broker.name)
+                LOGGER.info(
+                    "Closed %s SHORT position | feed_symbol=%s order_symbol=%s",
+                    broker_label,
+                    symbol,
+                    order_symbol,
+                )
+                success = True
+                message = (
+                    f"Closed {broker_label} SHORT position | feed_symbol={symbol} "
+                    f"order_symbol={order_symbol}"
+                )
         else:
             LOGGER.debug("Unknown trading action %s; skipping", action)
             message = f"Unknown trading action {action_upper}"
@@ -486,7 +540,7 @@ def format_alpaca_symbol(symbol: str) -> str:
 
 
 def _resolve_order_notional(
-    broker: TradingBrokerAdapter, *, ratio: float, max_notional: Optional[float]
+    broker: TradingBrokerAdapter, *, ratio: float, max_notional: Optional[float], scale: float = 1.0
 ) -> float:
     try:
         account = broker.account_overview()
@@ -511,8 +565,17 @@ def _resolve_order_notional(
         LOGGER.error("Unsupported broker %s for notional resolution", broker.name)
         return 0.0
 
+    LOGGER.info(
+        "Resolved notional for %s: ratio=%.4f notional=%.2f (before scale/clamp)",
+        broker.name.upper(), ratio, notional
+    )
+
     if notional <= 0.0:
         return 0.0
+
+    if scale != 1.0:
+        notional *= scale
+        LOGGER.info("Applied order scale %.2f -> notional %.2f", scale, notional)
 
     if max_notional is not None and notional > max_notional:
         LOGGER.debug(
@@ -526,48 +589,63 @@ def _resolve_order_notional(
 
 
 def _resolve_alpaca_notional(account: Dict[str, Any], ratio: float) -> float:
-    for key in ("buying_power", "cash"):
+    # Prioritize 'equity' or 'portfolio_value' for consistent sizing
+    candidates = []
+    for key in ("equity", "portfolio_value", "buying_power", "cash"):
         value = account.get(key)
-        if value is None:
-            continue
+        if value is not None:
+             candidates.append((key, value))
+             
+    for key, val in candidates:
         try:
-            amount = float(value)
+            amount = float(val)
         except (TypeError, ValueError):
-            LOGGER.debug("Unable to parse Alpaca %s balance: %s", key, value)
+            LOGGER.debug("Unable to parse Alpaca %s balance: %s", key, val)
             continue
         if amount > 0:
+            LOGGER.info("Using Alpaca %s=%.2f for sizing", key, amount)
             return amount * ratio
-    LOGGER.info("Alpaca account has no cash or buying power available for trading")
+            
+    LOGGER.info("Alpaca account has no valid balance for trading")
     return 0.0
 
 
 def _resolve_binance_notional(account: Dict[str, Any], ratio: float) -> float:
     candidates = []
     account_info = account.get("info") or {}
-    for info_key in ("availableBalance", "totalWalletBalance", "cashBalance"):
+    
+    # Prioritize Total Equity (Wallet Balance or Margin Balance)
+    # totalWalletBalance: Realized Equity (Stable)
+    # totalMarginBalance: Mark-to-Market Equity (Includes Unrealized PnL)
+    # User requested "Total Equity", usually implies including unrealized PnL for compounding, 
+    # but Wallet Balance is safer against volatility. 
+    # Let's prioritize totalWalletBalance as "Total Equity".
+    
+    for info_key in ("totalWalletBalance", "totalMarginBalance", "availableBalance", "cashBalance"):
         value = account_info.get(info_key)
         if value is not None:
-            candidates.append(value)
+            candidates.append((info_key, value))
 
     usdt_entry = account.get("USDT") or {}
-    for bal_key in ("free", "total"):
+    for bal_key in ("total", "free"):
         value = usdt_entry.get(bal_key)
         if value is not None:
-            candidates.append(value)
+            candidates.append((f"USDT.{bal_key}", value))
 
-    for container_key in ("free", "total"):
+    for container_key in ("total", "free"):
         container = account.get(container_key) or {}
         value = container.get("USDT")
         if value is not None:
-            candidates.append(value)
+            candidates.append((f"{container_key}.USDT", value))
 
-    for raw in candidates:
+    for key, raw in candidates:
         try:
             amount = float(raw)
         except (TypeError, ValueError):
             LOGGER.debug("Unable to parse Binance balance value: %s", raw)
             continue
         if amount > 0:
+            LOGGER.info("Using Binance %s=%.2f for sizing", key, amount)
             return amount * ratio
 
     LOGGER.info("Binance account has no USDT available for trading")

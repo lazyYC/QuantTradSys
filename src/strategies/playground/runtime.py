@@ -25,6 +25,8 @@ class StarRuntimeState:
     entry_price: Optional[float] = None
     entry_timestamp: Optional[pd.Timestamp] = None
     min_exit_timestamp: Optional[pd.Timestamp] = None
+    # New: Track active stacks for pyramiding
+    stacks: Optional[list[dict]] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -39,6 +41,7 @@ class StarRuntimeState:
             "min_exit_timestamp": self.min_exit_timestamp.isoformat()
             if self.min_exit_timestamp
             else None,
+            "stacks": self.stacks,
         }
 
     @classmethod
@@ -73,6 +76,7 @@ class StarRuntimeState:
             entry_price=entry_price,
             entry_timestamp=entry_timestamp,
             min_exit_timestamp=min_exit_timestamp,
+            stacks=data.get("stacks"),
         )
 
 
@@ -89,13 +93,24 @@ def generate_realtime_signal(
     min_hold_duration: Optional[pd.Timedelta] = None,
     stop_loss_pct: Optional[float] = None,
 ) -> Tuple[str, Dict[str, object], StarRuntimeState]:
-    """根據最新 K 線資料產出 star_xgb 策略的即時訊號。"""
+    """根據最新 K 線資料產出 star_xgb 策略的即時訊號 (支援 Pyramiding)。"""
     if df.empty:
         return "HOLD", {"reason": "no_data"}, state or StarRuntimeState()
 
     runtime_state = state or StarRuntimeState()
     if not class_means:
         return "HOLD", {"reason": "missing_class_means"}, runtime_state
+
+    # Initialize stacks if None
+    if runtime_state.stacks is None:
+        runtime_state.stacks = []
+        # Migration: if legacy state exists, convert to 1 stack
+        if runtime_state.position_side and runtime_state.entry_timestamp:
+             runtime_state.stacks.append({
+                 "entry_timestamp": runtime_state.entry_timestamp.isoformat(),
+                 "entry_price": runtime_state.entry_price,
+                 "min_exit_timestamp": runtime_state.min_exit_timestamp.isoformat() if runtime_state.min_exit_timestamp else None,
+             })
 
     cache = cache or _build_cache_for_runtime(df, indicator_params)
     features = cache.build_features(indicator_params, df)
@@ -131,117 +146,142 @@ def generate_realtime_signal(
         elif pred_class == -2:
             target_price = price * (1.0 - expected_return)
 
-    # 訊號上下文：僅保留單一價格欄位避免重複
     context: Dict[str, object] = {
         "time_utc": str(latest["timestamp"]),
-        "signal_price": price,  # 最新收盤價作為訊號價
+        "signal_price": price,
         "expected_return": expected_return,
         "predicted_class": int(pred_class),
         "target_price": target_price,
+        "active_stacks": len(runtime_state.stacks),
     }
 
-    if runtime_state.position_side:
-        exit_signal = False
+    # 1. Check Exits for existing stacks
+    stacks_to_remove = []
+    longs_to_exit = 0
+    shorts_to_exit = 0
+    stop_triggered_stacks = 0
+    
+    for i, stack in enumerate(runtime_state.stacks):
+        entry_ts = pd.to_datetime(stack["entry_timestamp"], utc=True)
+        entry_price = stack["entry_price"]
+        stack_side = stack.get("side", runtime_state.position_side) # Fallback for legacy
+        min_exit_ts = pd.to_datetime(stack["min_exit_timestamp"], utc=True) if stack.get("min_exit_timestamp") else None
+        
+        # Check holding time
+        hold_elapsed = False
+        if min_exit_ts and timestamp >= min_exit_ts:
+            hold_elapsed = True
+            
+        # Check Stop Loss
         stop_triggered = False
-        trade_return = None
-        hold_elapsed = True
-        min_exit_ts = runtime_state.min_exit_timestamp
-        if (
-            min_hold_duration
-            and timestamp is not None
-            and runtime_state.entry_timestamp is not None
-        ):
-            if min_exit_ts is None:
-                min_exit_ts = runtime_state.entry_timestamp + min_hold_duration
-            hold_elapsed = timestamp >= min_exit_ts
-        if runtime_state.entry_price and not np.isnan(price):
-            if runtime_state.position_side == "LONG":
-                trade_return = (
-                    price - runtime_state.entry_price
-                ) / runtime_state.entry_price
+        if entry_price and not np.isnan(price):
+            if stack_side == "LONG":
+                trade_return = (price - entry_price) / entry_price
                 if stop_loss_pct and trade_return <= -abs(stop_loss_pct):
                     stop_triggered = True
-            else:
-                trade_return = (
-                    runtime_state.entry_price - price
-                ) / runtime_state.entry_price
+            elif stack_side == "SHORT":
+                trade_return = (entry_price - price) / entry_price
                 if stop_loss_pct and trade_return <= -abs(stop_loss_pct):
                     stop_triggered = True
-        if hold_elapsed:
-            if runtime_state.position_side == "LONG":
-                exit_signal = pred_class in {0, -1, -2}
-            elif runtime_state.position_side == "SHORT":
-                exit_signal = pred_class in {0, 1, 2}
+        
+        should_exit = False
+        if stop_triggered:
+            should_exit = True
+            stop_triggered_stacks += 1
+        elif hold_elapsed:
+            should_exit = True
+            
+        if should_exit:
+            stacks_to_remove.append(i)
+            if stack_side == "LONG":
+                longs_to_exit += 1
+            elif stack_side == "SHORT":
+                shorts_to_exit += 1
 
-        if (exit_signal or stop_triggered) and timestamp is not None and not np.isnan(
-            price
-        ):
-            context.update(
-                {
-                    "action": f"exit_{runtime_state.position_side.lower()}",
-                    "threshold": threshold,
-                    "return": trade_return,
-                    "hold_elapsed": hold_elapsed,
-                    "stop_loss_triggered": stop_triggered,
-                    "min_exit_timestamp": (
-                        min_exit_ts.isoformat() if min_exit_ts is not None else None
-                    ),
-                }
-            )
-            new_state = StarRuntimeState(last_signal_timestamp=timestamp)
-            context = round_numeric_fields(
-                context, decimals_map={"expected_return": 4, "return": 4}
-            )
-            return f"EXIT_{runtime_state.position_side}", context, new_state
+    # Remove exited stacks
+    if stacks_to_remove:
+        for i in sorted(stacks_to_remove, reverse=True):
+            runtime_state.stacks.pop(i)
 
-        if not hold_elapsed:
-            context.update(
-                {
-                    "reason": "min_hold_active",
-                    "threshold": threshold,
-                    "hold_elapsed": False,
-                    "min_exit_timestamp": (
-                        min_exit_ts.isoformat() if min_exit_ts is not None else None
-                    ),
-                }
-            )
-            context = round_numeric_fields(context, decimals_map={"expected_return": 4})
-            return "HOLD", context, runtime_state
+    # 2. Check Entries (if not max stacks)
+    MAX_STACKS = 5
+    entry_action = None
+    entry_side = None
+    
+    if len(runtime_state.stacks) < MAX_STACKS:
+        # Check Long Entry
+        if pred_class == 2 and expected_return >= threshold:
+             entry_action = "ENTER_LONG"
+             entry_side = "LONG"
+        # Check Short Entry
+        elif pred_class == -2 and expected_return >= threshold:
+             entry_action = "ENTER_SHORT"
+             entry_side = "SHORT"
+             
+        if entry_action:
+             min_exit_timestamp = None
+             if min_hold_duration and timestamp is not None:
+                min_exit_timestamp = timestamp + min_hold_duration
+                
+             new_stack = {
+                 "entry_timestamp": timestamp.isoformat(),
+                 "entry_price": price,
+                 "min_exit_timestamp": min_exit_timestamp.isoformat() if min_exit_timestamp else None,
+                 "side": entry_side
+             }
+             runtime_state.stacks.append(new_stack)
 
-    if (
-        runtime_state.position_side is None
-        and expected_return >= threshold
-        and not np.isnan(price)
-    ):
-        min_exit_timestamp = None
-        if min_hold_duration and timestamp is not None:
-            min_exit_timestamp = timestamp + min_hold_duration
-        if pred_class == 2:
-            context.update({"action": "enter_long", "threshold": threshold})
-            new_state = StarRuntimeState(
-                last_signal_timestamp=timestamp,
-                position_side="LONG",
-                entry_price=price,
-                entry_timestamp=timestamp,
-                min_exit_timestamp=min_exit_timestamp,
-            )
-            context = round_numeric_fields(context, decimals_map={"expected_return": 4})
-            return "ENTER_LONG", context, new_state
-        if pred_class == -2:
-            context.update({"action": "enter_short", "threshold": threshold})
-            new_state = StarRuntimeState(
-                last_signal_timestamp=timestamp,
-                position_side="SHORT",
-                entry_price=price,
-                entry_timestamp=timestamp,
-                min_exit_timestamp=min_exit_timestamp,
-            )
-            context = round_numeric_fields(context, decimals_map={"expected_return": 4})
-            return "ENTER_SHORT", context, new_state
+    # 3. Calculate Net Action
+    # Net Change = (New Longs - Exiting Longs) - (New Shorts - Exiting Shorts)
+    # Actually, easier:
+    # Action needed:
+    # Sell = Exiting Longs + Entering Shorts
+    # Buy = Exiting Shorts + Entering Longs
+    # Net = Buy - Sell
+    
+    sells_needed = longs_to_exit + (1 if entry_action == "ENTER_SHORT" else 0)
+    buys_needed = shorts_to_exit + (1 if entry_action == "ENTER_LONG" else 0)
+    
+    net_qty = buys_needed - sells_needed
+    
+    # Update legacy fields (approximate)
+    if not runtime_state.stacks:
+        runtime_state.position_side = None
+    else:
+        # Set to side of latest stack or dominant?
+        # Just use latest for simplicity
+        runtime_state.position_side = runtime_state.stacks[-1].get("side")
+        runtime_state.entry_price = runtime_state.stacks[-1].get("entry_price")
+        runtime_state.entry_timestamp = pd.Timestamp(runtime_state.stacks[-1].get("entry_timestamp"), tz="UTC")
+        min_exit_str = runtime_state.stacks[-1].get("min_exit_timestamp")
+        runtime_state.min_exit_timestamp = pd.Timestamp(min_exit_str, tz="UTC") if min_exit_str else None
 
-    context.update({"reason": "no_action", "threshold": threshold})
-    context = round_numeric_fields(context, decimals_map={"expected_return": 4})
-    return "HOLD", context, runtime_state
+    if net_qty == 0:
+        context.update({"reason": "no_action_or_net_zero", "threshold": threshold})
+        return "HOLD", context, runtime_state
+        
+    final_action = "ENTER_LONG" if net_qty > 0 else "ENTER_SHORT"
+    scale = abs(net_qty)
+    
+    context.update({
+        "action": final_action.lower(),
+        "scale": float(scale),
+        "reason": "netting_logic",
+        "longs_exited": longs_to_exit,
+        "shorts_exited": shorts_to_exit,
+        "entry_action": entry_action,
+        "active_stacks": len(runtime_state.stacks)
+    })
+    
+    new_state = StarRuntimeState(
+        last_signal_timestamp=timestamp,
+        position_side=runtime_state.position_side,
+        entry_price=runtime_state.entry_price,
+        entry_timestamp=runtime_state.entry_timestamp,
+        min_exit_timestamp=runtime_state.min_exit_timestamp,
+        stacks=runtime_state.stacks
+    )
+    return final_action, context, new_state
 
 
 def load_star_model(model_path: Path | str) -> lgb.Booster:
