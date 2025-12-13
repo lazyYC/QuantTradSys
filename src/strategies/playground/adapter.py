@@ -29,6 +29,60 @@ class PlaygroundStrategy(BaseStrategy):
     def __init__(self):
         self._cache: Optional[StarFeatureCache] = None
 
+    def split_data(
+        self, 
+        data: pd.DataFrame, 
+        test_days: int = 30, 
+        valid_days: int = 30
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Override default time-based split with random split.
+        Ignores days parameters and uses fixed ratios or assumes train.py generic split is insufficient.
+        Wait, train.py calls this to get datasets to SAVE.
+        The user wants 'train/valid/test' separation.
+        
+        For playground, we want:
+        1. Test Set: Still time-based? Or random? 
+           Usually 'Test' in backtesting implies 'Out of Sample' -> Time based is safer.
+           But 'Valid' inside Train is random.
+           
+        But `train.py` logic separates 3 chunks.
+        If `Playground` wants random split, it usually means:
+        Train + Valid are mixed randomly. Test is held out (Time based).
+        
+        Let's implement:
+        Test = Last 30 days (Time based, for final sanity check).
+        Train/Valid = Remaining data shuffles.
+        """
+        # 1. Isolate Test Set (Time Based - to keep a true OOS)
+        if data.empty:
+            return data.copy(), data.copy(), data.copy()
+            
+        max_timestamp = data["timestamp"].max()
+        test_cutoff = max_timestamp - pd.Timedelta(days=test_days)
+        test_df = data[data["timestamp"] > test_cutoff].copy()
+        
+        # 2. Remaining is Train + Valid
+        remaining_df = data[data["timestamp"] <= test_cutoff].copy()
+        
+        # 3. Random Split for Train/Valid
+        from sklearn.model_selection import train_test_split
+        # Approx ratio: valid_days / (total_days - test_days)? 
+        # Or just fixed 10%? unique 1/11 used in adapter.train implies ~9%
+        
+        if remaining_df.empty:
+             return remaining_df, remaining_df, test_df
+             
+        train_ds, valid_ds = train_test_split(
+            remaining_df, 
+            test_size=0.1,  # Fixed 10% for validation
+            random_state=42, 
+            shuffle=True
+        )
+        
+        return train_ds.reset_index(drop=True), valid_ds.reset_index(drop=True), test_df.reset_index(drop=True)
+
+
     def warm_up(self, raw_data: pd.DataFrame) -> None:
         """
         Initialize the feature cache with all possible window sizes defined in the search space.
