@@ -176,23 +176,18 @@ def main() -> None:
         # Split data for recording
         # from utils.data_utils import split_train_test # Unused
         
-        # Split data for recording based on user requirement:
-        # Test: Last 30 days (Day 331-360)
-        # Valid: Previous 30 days (Day 301-330)
-        # Train: The rest (Day 1-300)
+        # Split data for recording using strategy-specific logic
+        # This supports both time-series split (default) and random split (playground)
         
         test_days = args.test_days
-        # Assuming valid_days is same as test_days for now, or we could add an arg.
-        # The user said "Day 301 ~ Day 330 = valid", which implies valid_days = test_days = 30.
+        # Assuming valid_days is same as test_days for now
         valid_days = test_days 
         
-        max_timestamp = cleaned_df["timestamp"].max()
-        test_cutoff = max_timestamp - pd.Timedelta(days=test_days)
-        valid_cutoff = test_cutoff - pd.Timedelta(days=valid_days)
-        
-        test_df = cleaned_df[cleaned_df["timestamp"] > test_cutoff]
-        valid_df = cleaned_df[(cleaned_df["timestamp"] > valid_cutoff) & (cleaned_df["timestamp"] <= test_cutoff)]
-        train_df = cleaned_df[cleaned_df["timestamp"] <= valid_cutoff]
+        train_df, valid_df, test_df = strategy.split_data(
+            cleaned_df, 
+            test_days=test_days, 
+            valid_days=valid_days
+        )
         
         datasets_to_run = [
             ("train", train_df),
