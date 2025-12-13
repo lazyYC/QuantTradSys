@@ -8,16 +8,7 @@ from pathlib import Path
 import _setup
 from _setup import DEFAULT_MARKET_DB
 
-import pandas as pd
-
-from data_pipeline.ccxt_fetcher import (
-    ensure_database,
-    fetch_yearly_ohlcv,
-    prune_older_rows,
-    upsert_ohlcv_rows,
-)
-from utils.symbols import canonicalize_symbol
-from utils.data_utils import dataframe_to_rows
+from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,26 +24,16 @@ def main() -> None:
 
     _setup.setup_logging()
     LOGGER.info("Fetching %s %s for %s days", args.symbol, args.timeframe, args.lookback_days)
-    df = fetch_yearly_ohlcv(
+    
+    # Use db_path to let the fetcher handle storage, gap filling, and incremental updates
+    fetch_yearly_ohlcv(
         symbol=args.symbol,
         timeframe=args.timeframe,
         exchange_id=args.exchange,
         lookback_days=args.lookback_days,
-        db_path=None,
+        db_path=args.db,
         prune_history=False,
     )
-    if df.empty:
-        LOGGER.warning("No data fetched; aborting")
-        return
-
-    conn = ensure_database(args.db)
-    canonical_symbol = canonicalize_symbol(args.symbol)
-    rows = dataframe_to_rows(df)
-    inserted = upsert_ohlcv_rows(conn, canonical_symbol, args.timeframe, rows)
-    LOGGER.info("Inserted %s rows into %s for %s", inserted, args.db, canonical_symbol)
-
-    conn.close()
-
 
 if __name__ == "__main__":
     main()
