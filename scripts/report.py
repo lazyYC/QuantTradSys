@@ -24,6 +24,7 @@ from persistence.trade_store import load_metrics, load_trades
 from strategies.base import BaseStrategy
 from strategies.loader import load_strategy_class
 from utils.symbols import canonicalize_symbol
+from data_pipeline.reader import read_ohlcv
 
 # Import reporting utilities
 from reporting.tables import (
@@ -79,7 +80,7 @@ def main() -> None:
         sys.exit(1)
 
     # 4. Load Data (OHLCV)
-    candles = _load_candles_from_db(
+    candles = read_ohlcv(
         Path(args.ohlcv_db),
         symbol,
         timeframe,
@@ -200,37 +201,16 @@ def _filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp | None
     return frame.reset_index(drop=True)
 
 
-def _load_candles_from_db(
-    db_path: Path,
-    symbol: str,
-    timeframe: str,
-    *,
-    start_ts: pd.Timestamp | None = None,
-    end_ts: pd.Timestamp | None = None,
-) -> pd.DataFrame:
-    if not db_path.exists():
-        return pd.DataFrame()
-        
-    conn = sqlite3.connect(db_path)
-    clause = "symbol = ? AND timeframe = ?"
-    params: List[object] = [symbol, timeframe]
+    # 4. Load Data (OHLCV)
+    # Using unified fetcher (offline mode if possible?)
+    # For now, to avoid code duplication, we can move the DB reading logic to a shared utility
+    # or just rely on the existing fetcher but that implies network.
+    # The review mentioned duplication.
+    # Let's see... backfill_ohlcv logic was removed.
+    # If I create `src/data_pipeline/reader.py`?
     
-    if start_ts is not None:
-        clause += " AND ts >= ?"
-        params.append(int(start_ts.timestamp() * 1000))
-    if end_ts is not None:
-        clause += " AND ts <= ?"
-        params.append(int(end_ts.timestamp() * 1000))
-        
-    query = f"SELECT ts, open, high, low, close, volume FROM ohlcv WHERE {clause} ORDER BY ts"
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    
-    if not df.empty:
-        df["timestamp"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
-        df = df.drop(columns=["ts"])
-        
-    return df
+    # Actually, let's look at `utils.data_utils`.
+    pass
 
 
 def _load_trades_from_db(
