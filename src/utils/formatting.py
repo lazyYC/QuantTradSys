@@ -69,7 +69,7 @@ def round_numeric_fields(
     return rounded
 
 
-def _format_ts(ts_ms: int) -> str:
+def format_ts(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
 
 
@@ -78,5 +78,5 @@ __all__ = [
     "format_metrics",
     "format_params",
     "round_numeric_fields",
-    "_format_ts",
+    "format_ts",
 ]

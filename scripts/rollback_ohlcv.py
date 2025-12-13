@@ -8,19 +8,19 @@ import _setup
 from _setup import DEFAULT_MARKET_DB
 
 from utils.symbols import canonicalize_symbol
-from utils.formatting import _format_ts
+from utils.formatting import format_ts
 
 MILLIS_PER_DAY = 86_400_000
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prune recent OHLCV data from the SQLite store.")
+    parser = argparse.ArgumentParser(description="Rollback recent OHLCV data from the SQLite store (Delete recent N days/candles).")
     parser.add_argument("--db", type=Path, default=DEFAULT_MARKET_DB, help="SQLite database path")
     parser.add_argument("--symbol", required=True, help="Trading symbol, e.g. BTC/USDT")
     parser.add_argument("--timeframe", required=True, help="Timeframe, e.g. 5m")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--days", type=float, help="Remove the most recent N days of candles")
-    group.add_argument("--limit", type=int, help="Remove the most recent N candles")
+    group.add_argument("--days", type=float, help="Rollback the most recent N days of candles")
+    group.add_argument("--limit", type=int, help="Rollback the most recent N candles")
     parser.add_argument("--dry-run", action="store_true", help="Show how many rows would be deleted without modifying the DB")
     args = parser.parse_args()
 
@@ -28,14 +28,14 @@ def main() -> None:
     try:
         symbol = canonicalize_symbol(args.symbol)
         if args.days is not None:
-            prune_recent_days(conn, symbol, args.timeframe, args.days, args.dry_run)
+            rollback_recent_days(conn, symbol, args.timeframe, args.days, args.dry_run)
         else:
-            prune_recent_limit(conn, symbol, args.timeframe, args.limit, args.dry_run)
+            rollback_recent_limit(conn, symbol, args.timeframe, args.limit, args.dry_run)
     finally:
         conn.close()
 
 
-def prune_recent_days(
+def rollback_recent_days(
     conn: sqlite3.Connection, symbol: str, timeframe: str, days: float, dry_run: bool
 ) -> int:
     if days <= 0:
@@ -52,7 +52,7 @@ def prune_recent_days(
     cutoff = int(max_ts - days * MILLIS_PER_DAY)
     if cutoff <= min_ts:
         cutoff = min_ts
-    print(f"Deleting rows with ts >= {cutoff} ({_format_ts(cutoff)})")
+    print(f"Rolling back rows with ts >= {cutoff} ({format_ts(cutoff)})")
     if dry_run:
         cursor = conn.execute(
             "SELECT COUNT(*) FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts >= ?",
@@ -70,7 +70,7 @@ def prune_recent_days(
     return cursor.rowcount
 
 
-def prune_recent_limit(
+def rollback_recent_limit(
     conn: sqlite3.Connection, symbol: str, timeframe: str, limit: int, dry_run: bool
 ) -> int:
     if limit <= 0:
@@ -98,7 +98,7 @@ def prune_recent_limit(
     condition = "ts >= ?" if cutoff >= 0 else "1=1"
     params = (symbol, timeframe, cutoff) if cutoff >= 0 else (symbol, timeframe)
     if cutoff >= 0:
-        print(f"Deleting rows with ts >= {cutoff} ({_format_ts(cutoff)})")
+        print(f"Rolling back rows with ts >= {cutoff} ({format_ts(cutoff)})")
     else:
         print("Deleting all rows for the specified symbol/timeframe.")
     query = (
