@@ -34,7 +34,9 @@ from persistence.runtime_store import load_runtime_state, save_runtime_state
 from utils.data_utils import prepare_ohlcv_frame, timeframe_to_offset
 from strategies.star_xgb.features import StarFeatureCache
 from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
+from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
 from utils.symbols import canonicalize_symbol
+from utils.pid_lock import PIDLock, AlreadyRunningError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -78,18 +80,31 @@ def main() -> None:
     
     LOGGER.info(f"Loaded configuration for {args.strategy}/{args.study}: {symbol} {timeframe}")
 
-    engine = RealtimeEngine(
-        symbol=symbol,
-        timeframe=timeframe,
-        strategy=args.strategy,
-        study=args.study,
-        lookback_days=args.lookback_days,
-        params_store_path=args.params_db,
-        state_store_path=args.state_db,
-        market_db_path=args.ohlcv_db,
-        exchange=args.exchange,
-    )
-    engine.start()
+    # 2. Acquire PID Lock
+    lock_file = args.log_path.parent.parent / "locks" / f"{args.strategy}_{args.study}.lock"
+    pid_lock = PIDLock(lock_file)
+    
+    try:
+        pid_lock.acquire()
+    except AlreadyRunningError as e:
+        LOGGER.error(str(e))
+        sys.exit(1)
+
+    try:
+        engine = RealtimeEngine(
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy=args.strategy,
+            study=args.study,
+            lookback_days=args.lookback_days,
+            params_store_path=args.params_db,
+            state_store_path=args.state_db,
+            market_db_path=args.ohlcv_db,
+            exchange=args.exchange,
+        )
+        engine.start()
+    finally:
+        pid_lock.release()
 
 
 def _safe_concat(base: pd.DataFrame, row: pd.DataFrame, max_rows: int) -> pd.DataFrame:

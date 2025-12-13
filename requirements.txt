@@ -13,3 +13,4 @@ plotly
 optuna
 lightgbm
 websocket-client
+psutil
