@@ -201,16 +201,7 @@ def _filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp | None
     return frame.reset_index(drop=True)
 
 
-    # 4. Load Data (OHLCV)
-    # Using unified fetcher (offline mode if possible?)
-    # For now, to avoid code duplication, we can move the DB reading logic to a shared utility
-    # or just rely on the existing fetcher but that implies network.
-    # The review mentioned duplication.
-    # Let's see... backfill_ohlcv logic was removed.
-    # If I create `src/data_pipeline/reader.py`?
-    
-    # Actually, let's look at `utils.data_utils`.
-    pass
+
 
 
 def _load_trades_from_db(
