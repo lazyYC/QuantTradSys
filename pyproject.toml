@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant_trad_sys"
+version = "0.1.0"
+description = "A quantitative trading system with multiple strategy support."
+authors = [{name = "User", email = "user@example.com"}]
+dependencies = [
+    "pandas",
+    "ccxt",
+    "optuna",
+    "lightgbm",
+    "scikit-learn",
+    "psutil",
+]
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]
