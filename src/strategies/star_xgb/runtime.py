@@ -268,8 +268,18 @@ def _expected_return(probs: np.ndarray, class_means: np.ndarray) -> float:
     return float(probs.reshape(-1, len(class_means)) @ class_means)
 
 
+
+# Aliases for generic access
+IndicatorParams = StarIndicatorParams
+ModelParams = StarModelParams
+
 __all__ = [
     "StarRuntimeState",
     "generate_realtime_signal",
     "load_star_model",
+    "StarIndicatorParams",
+    "StarModelParams",
+    "IndicatorParams",
+    "ModelParams",
 ]
+

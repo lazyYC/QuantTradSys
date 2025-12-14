@@ -32,9 +32,8 @@ from notifier.dispatcher import dispatch_signal
 from persistence.param_store import load_strategy_params
 from persistence.runtime_store import load_runtime_state, save_runtime_state
 from utils.data_utils import prepare_ohlcv_frame, timeframe_to_offset
-from strategies.star_xgb.features import StarFeatureCache
-from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
-from strategies.star_xgb.params import StarIndicatorParams, StarModelParams
+
+
 from utils.symbols import canonicalize_symbol
 from utils.pid_lock import PIDLock, AlreadyRunningError
 
@@ -167,28 +166,35 @@ class RealtimeEngine:
             payload["model_path"] = record.model_path
         
         # Validate Strategy Params
-        if strategy == "star_xgb":
-            from strategies.star_xgb.runtime import (
-                StarRuntimeState,
-                generate_realtime_signal,
-                load_star_model,
-            )
-            self.RuntimeStateCls = StarRuntimeState
-            self.generate_signal_fn = generate_realtime_signal
-            self.load_model_fn = load_star_model
-            self._init_star_xgb(payload)
-        elif strategy == "playground":
-            from strategies.playground.runtime import (
-                StarRuntimeState,
-                generate_realtime_signal,
-                load_star_model,
-            )
-            self.RuntimeStateCls = StarRuntimeState
-            self.generate_signal_fn = generate_realtime_signal
-            self.load_model_fn = load_star_model
-            self._init_star_xgb(payload)
+        # Dynamic Runtime Loading
+        from strategies.loader import load_strategy_runtime
+        runtime_mod = load_strategy_runtime(strategy)
+        
+        # Bind generic hooks
+        self.RuntimeStateCls = getattr(runtime_mod, "StarRuntimeState", getattr(runtime_mod, "RuntimeState", None))
+        if not self.RuntimeStateCls:
+             # Fallback or strict?
+             # Since generic aliases were added, prefer those if RuntimeState is standardized.
+             pass
+             
+        # Actually star_xgb/playground export StarRuntimeState. 
+        # I should probably just look for "StarRuntimeState" for now, or standardize "RuntimeState" alias.
+        # But I didn't add RuntimeState alias in previous step.
+        # So I will stick to "StarRuntimeState" for back-compat or inspect.
+        self.RuntimeStateCls = runtime_mod.StarRuntimeState
+        
+        self.generate_signal_fn = runtime_mod.generate_realtime_signal
+        
+        # load_model alias?
+        if hasattr(runtime_mod, "load_star_model"):
+            self.load_model_fn = runtime_mod.load_star_model
+        elif hasattr(runtime_mod, "load_model"):
+             self.load_model_fn = runtime_mod.load_model
         else:
-            raise NotImplementedError(f"Strategy {strategy} not supported in realtime engine yet.")
+             raise RuntimeError(f"Runtime {strategy} missing load_model function")
+             
+        # Initialize params using the loaded module
+        self._init_strategy_params(payload, runtime_mod)
 
         self.timeframe_offset = timeframe_to_offset(self.timeframe)
         
@@ -201,7 +207,7 @@ class RealtimeEngine:
             timeframe=timeframe
         )
         
-        if strategy in ("star_xgb", "playground"):
+        if self.RuntimeStateCls:
             self.runtime_state = self.RuntimeStateCls.from_dict(
                 runtime_record.state if runtime_record else None
             )
@@ -240,13 +246,17 @@ class RealtimeEngine:
 
         self.subscriber: Optional[BinanceKlineSubscriber] = None
 
-    def _init_star_xgb(self, payload: Dict) -> None:
+    def _init_strategy_params(self, payload: Dict, runtime_mod: Any) -> None:
         # Extract params for Indicator and Model from flat payload
         # We filter the payload to match the dataclass fields
         from dataclasses import fields
         
-        indicator_keys = {f.name for f in fields(StarIndicatorParams)}
-        model_keys = {f.name for f in fields(StarModelParams)}
+        # Use aliases if available, else fallback
+        IndicatorParamsCls = getattr(runtime_mod, "IndicatorParams", getattr(runtime_mod, "StarIndicatorParams"))
+        ModelParamsCls = getattr(runtime_mod, "ModelParams", getattr(runtime_mod, "StarModelParams"))
+        
+        indicator_keys = {f.name for f in fields(IndicatorParamsCls)}
+        model_keys = {f.name for f in fields(ModelParamsCls)}
         
         indicator_kwargs = {k: v for k, v in payload.items() if k in indicator_keys}
         model_kwargs = {k: v for k, v in payload.items() if k in model_keys}
@@ -268,8 +278,8 @@ class RealtimeEngine:
         if not all([model_path, feature_columns, class_means, feature_stats]):
              raise RuntimeError(f"Missing artifacts (model_path, feature_columns, etc) for strategy={self.strategy} study={self.study}")
              
-        self.indicator = StarIndicatorParams(**indicator_kwargs)
-        self.model_params = StarModelParams(**model_kwargs)
+        self.indicator = IndicatorParamsCls(**indicator_kwargs)
+        self.model_params = ModelParamsCls(**model_kwargs)
         self.feature_columns = feature_columns
         self.class_means = class_means
         self.feature_stats = feature_stats
@@ -371,21 +381,14 @@ class RealtimeEngine:
         self._evaluate("websocket")
 
     def _evaluate(self, source: str) -> None:
-        if self.strategy in ("star_xgb", "playground"):
-            self._evaluate_star_xgb(source)
+        self._evaluate_strategy(source)
 
-    def _evaluate_star_xgb(self, source: str) -> None:
+    def _evaluate_strategy(self, source: str) -> None:
         with self.data_lock:
             df = self.price_df.copy()
             
-        cache = StarFeatureCache(
-            df,
-            trend_windows=[self.indicator.trend_window],
-            atr_windows=[self.indicator.atr_window],
-            volatility_windows=[self.indicator.volatility_window],
-            volume_windows=[self.indicator.volume_window],
-            pattern_windows=[self.indicator.pattern_lookback],
-        )
+        # OCP: We do NOT build explicit cache here, relying on runtime to build it if needed.
+        # This removes the dependency on StarFeatureCache.
         
         action, context, new_state = self.generate_signal_fn(
             df=df,
@@ -395,7 +398,7 @@ class RealtimeEngine:
             feature_columns=self.feature_columns,
             class_means=self.class_means,
             feature_stats=self.feature_stats,
-            cache=cache,
+            cache=None, # runtime will build it
             state=self.runtime_state,
             min_hold_duration=self.min_hold_duration,
             stop_loss_pct=self.stop_loss_pct,

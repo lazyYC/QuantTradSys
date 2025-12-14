@@ -41,3 +41,24 @@ def load_strategy_class(strategy_name: str) -> Type[BaseStrategy]:
         
     except ImportError as e:
         raise ValueError(f"Could not load strategy '{strategy_name}': {e}")
+
+
+def load_strategy_runtime(strategy_name: str):
+    """
+    Dynamically load the runtime module of a strategy.
+    Convention: strategies.{strategy_name}.runtime
+    
+    The runtime module is expected to export:
+    - generate_realtime_signal
+    - load_star_model (or generic load_model)
+    - RuntimeState class
+    - IndicatorParams class
+    - ModelParams class
+    """
+    try:
+        module_path = f"strategies.{strategy_name}.runtime"
+        module = importlib.import_module(module_path)
+        return module
+    except ImportError as e:
+        raise ValueError(f"Could not load runtime for strategy '{strategy_name}': {e}")
+
