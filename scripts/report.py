@@ -145,7 +145,7 @@ def main() -> None:
             trades_df["dataset"] = "backtest" 
             
     # 7. Build Equity Curve
-    equity_df = _build_equity_from_trades(trades_df)
+    equity_df = _build_equity_from_trades(trades_df, candles=candles)
     equity_df = _filter_by_time(equity_df, "timestamp", start_ts, end_ts)
 
     # 8. Build Sections for Chart (if applicable)
@@ -258,7 +258,106 @@ def _load_metrics_from_db(
     return pd.DataFrame()
 
 
-def _build_equity_from_trades(trades: pd.DataFrame) -> pd.DataFrame:
+def _build_equity_from_trades(trades: pd.DataFrame, candles: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Build a Mark-to-Market equity curve by simulating position exposure over time.
+    Calculates 100% unleveraged equity curve assuming:
+    1. Returns are compounded.
+    2. Position = sum of active trades (direction * quantity). 
+       Assuming quantity=1 per trade (stack) implies leverage if count > 1.
+    """
+    if candles is None or candles.empty:
+        # Fallback to simple closed-trade equity if no candles provided
+        return _build_simple_equity(trades)
+
+    if trades.empty:
+         return pd.DataFrame({"timestamp": candles["timestamp"], "equity": 1.0})
+
+    # 1. Align times
+    # Ensure candles are sorted and unique
+    df = candles[["timestamp", "close"]].copy().sort_values("timestamp").drop_duplicates("timestamp")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.set_index("timestamp").sort_index()
+    df["close"] = pd.to_numeric(df["close"], errors="coerce").ffill()
+    
+    # 2. Build Net Position Series
+    # We need to know how many stacks are active at each bar.
+    # Trades enter at 'entry_time' (Close) -> Exposure starts NEXT bar.
+    # Trades exit at 'exit_time' (Close) -> Exposure ends AFTER this bar.
+    
+    # We will use an event-based approach to sum positions
+    # +1/-1 at Entry, -1/+1 at Exit
+    
+    longs = trades[trades["side"] == "LONG"]
+    shorts = trades[trades["side"] == "SHORT"]
+    
+    # Create delta series
+    # deltas = pd.Series(0, index=df.index) # Not needed if we use reindex correctly
+    
+    # Map trade times to nearest candle timestamp efficiently
+    # We assume trade times roughly match candle times
+    
+    # Helper to aggregate counts by timestamp
+    def _agg_counts(frame, sign):
+        if frame.empty: return None
+        # Ensure entry_time is datetime
+        times = pd.to_datetime(frame["entry_time"], utc=True)
+        counts = times.value_counts()
+        return counts * sign
+        
+    def _agg_exits(frame, sign):
+        if frame.empty: return None
+        times = pd.to_datetime(frame["exit_time"], utc=True)
+        counts = times.value_counts()
+        return counts * sign
+
+    # Longs: +1 at Entry, -1 at Exit
+    l_in = _agg_counts(longs, 1)
+    l_out = _agg_exits(longs, -1)
+    
+    # Shorts: -1 at Entry, +1 at Exit
+    s_in = _agg_counts(shorts, -1)
+    s_out = _agg_exits(shorts, 1)
+    
+    all_changes = pd.concat([l_in, l_out, s_in, s_out], axis=0)
+    all_changes = all_changes.groupby(level=0).sum()
+    
+    # Reindex to candle timestamps
+    aligned_changes = all_changes.reindex(df.index, fill_value=0, method="nearest", tolerance=pd.Timedelta("1s"))
+    # Note: method='nearest' is good if times are slightly off, but '0s' tolerance means exact?
+    # Let's use tolerance=None (default) and method=None if we expect exact match.
+    # Actually, backtest times are exact.
+    aligned_changes = all_changes.reindex(df.index, fill_value=0)
+    
+    # Position at End of Bar T = Cumulative Sum of changes up to T
+    current_pos = aligned_changes.cumsum()
+    
+    # Exposure for Bar T (Return T-1 to T) is determined by Position at T-1
+    exposure = current_pos.shift(1).fillna(0)
+    
+    # 3. Calculate Returns
+    price_ret = df["close"].pct_change().fillna(0)
+    
+    # Strategy Return = Exposure * Asset Return
+    strat_ret = exposure * price_ret
+    
+    # 4. Transaction Costs?
+    # Simple approx: deduct cost on any change in position?
+    # abs(change) * cost_rate
+    # Let's assume 0.1% per trade side for visual realism
+    cost_rate = 0.001 
+    volume = aligned_changes.abs()
+    costs = volume * cost_rate
+    
+    total_ret = strat_ret - costs
+    
+    # 5. Equity Curve
+    equity = (1 + total_ret).cumprod()
+    
+    return pd.DataFrame({"timestamp": equity.index, "equity": equity.values})
+
+
+def _build_simple_equity(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "return" not in trades.columns:
         return pd.DataFrame(columns=["timestamp", "equity"])
     

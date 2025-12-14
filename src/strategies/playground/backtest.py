@@ -179,8 +179,27 @@ def backtest_star_xgb(
             records = []
             for idx in active_indices:
                 row = dataset.iloc[idx]
-                side = "LONG" if mask_long[idx] else "SHORT"
-                ret = pnl[idx]
+                is_long = mask_long[idx]
+                side = "LONG" if is_long else "SHORT"
+                
+                # Retrieve raw return from dataset (without transaction cost)
+                raw_return = (
+                    row["future_long_return"] if is_long 
+                    else row["future_short_return"]
+                )
+                if pd.isna(raw_return):
+                    raw_return = 0.0
+                    
+                entry_p = row["close"]
+                # Calculate Exit Price based on Return
+                # Long: Ret = (Exit - Entry) / Entry => Exit = Entry * (1 + Ret)
+                # Short: Ret = (Entry - Exit) / Entry => Exit = Entry * (1 - Ret)
+                if is_long:
+                    exit_p = entry_p * (1 + raw_return)
+                else:
+                    exit_p = entry_p * (1 - raw_return)
+
+                ret = pnl[idx] # This includes transaction cost subtraction
                 entry_time = row["timestamp"]
                 exit_time = entry_time + hold_duration
                 
@@ -190,8 +209,8 @@ def backtest_star_xgb(
                     "entry_time": entry_time,
                     "exit_time": exit_time,
                     "side": side,
-                    "entry_price": row["close"],
-                    "exit_price": row["close"], # Dummy, we rely on return
+                    "entry_price": entry_p,
+                    "exit_price": exit_p, 
                     "return": ret,
                     "holding_mins": holding_mins,
                     "entry_zscore": 0,
