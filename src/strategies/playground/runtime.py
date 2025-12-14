@@ -233,17 +233,41 @@ def generate_realtime_signal(
 
     # 3. Calculate Net Action
     # Net Change = (New Longs - Exiting Longs) - (New Shorts - Exiting Shorts)
-    # Actually, easier:
-    # Action needed:
-    # Sell = Exiting Longs + Entering Shorts
-    # Buy = Exiting Shorts + Entering Longs
-    # Net = Buy - Sell
     
     sells_needed = longs_to_exit + (1 if entry_action == "ENTER_SHORT" else 0)
     buys_needed = shorts_to_exit + (1 if entry_action == "ENTER_LONG" else 0)
     
     net_qty = buys_needed - sells_needed
     
+    # Generate Stack Details String
+    stack_details = []
+    for idx, s in enumerate(runtime_state.stacks):
+        entry_p = s.get("entry_price")
+        entry_t = s.get("entry_timestamp")
+        side = s.get("side", "LONG") # Default legacy
+        min_exit = s.get("min_exit_timestamp", "N/A")
+        
+        # Calculate PnL if possible
+        pnl_str = ""
+        if entry_p and not np.isnan(price):
+            if side == "LONG":
+                pnl = (price - entry_p) / entry_p * 100
+            else:
+                pnl = (entry_p - price) / entry_p * 100
+            pnl_str = f"({pnl:+.2f}%)"
+            
+        stack_details.append(f"#{idx+1} {side} @ {entry_p} {pnl_str} -> Exit: {min_exit}")
+        
+    stack_msg = "\n".join(stack_details) if stack_details else "No active stacks."
+
+    # Generate Netting Explanation
+    netting_msg = (
+        f"Actions: +{buys_needed} Buy / -{sells_needed} Sell\n"
+        f"  (Exits: {longs_to_exit}L + {shorts_to_exit}S)\n"
+        f"  (Entries: {entry_action or 'None'})\n"
+        f"Net Change: {net_qty:+d}"
+    )
+
     # Update legacy fields (approximate)
     if not runtime_state.stacks:
         runtime_state.position_side = None
@@ -256,9 +280,20 @@ def generate_realtime_signal(
         min_exit_str = runtime_state.stacks[-1].get("min_exit_timestamp")
         runtime_state.min_exit_timestamp = pd.Timestamp(min_exit_str, tz="UTC") if min_exit_str else None
 
+    # Base context update
+    context.update({
+        "stack_info": stack_msg,
+        "netting_info": netting_msg,
+    })
+
     if net_qty == 0:
-        context.update({"reason": "no_action_or_net_zero", "threshold": threshold})
-        return "HOLD", context, runtime_state
+        if buys_needed > 0 or sells_needed > 0:
+             # Significant internal activity resulting in net zero
+             context.update({"reason": "net_zero_rebalance", "threshold": threshold})
+             return "NET_ZERO", context, runtime_state
+        else:
+             context.update({"reason": "no_action", "threshold": threshold})
+             return "HOLD", context, runtime_state
         
     final_action = "ENTER_LONG" if net_qty > 0 else "ENTER_SHORT"
     scale = abs(net_qty)

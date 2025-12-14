@@ -329,6 +329,10 @@ def execute_trading(
                     f"Closed {broker_label} SHORT position | feed_symbol={symbol} "
                     f"order_symbol={order_symbol}"
                 )
+        elif action_upper == "NET_ZERO":
+            LOGGER.info("NET_ZERO action triggered: internal stack rebalancing completed without market order.")
+            success = True
+            message = "Net Zero Rebalancing (No Order Submitted)"
         else:
             LOGGER.debug("Unknown trading action %s; skipping", action)
             message = f"Unknown trading action {action_upper}"
@@ -511,7 +515,35 @@ def _extract_fill_price(resp: Dict[str, Any], *, broker_name: str) -> Optional[f
 
 
 def _send_discord(webhook: str, action: str, context: Dict[str, Any]) -> None:
-    message = context.get("message") or f"Signal: {action}\nContext: {context}"
+    message = context.get("message")
+    
+    if not message:
+        # Auto-format for Strategy Signals
+        base_msg = f"**Signal**: `{action}`"
+        
+        # Add Price/Target info
+        price = context.get("signal_price")
+        target = context.get("target_price")
+        if price:
+            base_msg += f"\nPrice: `{price}`"
+        if target:
+            base_msg += f"\nTarget: `{target:.2f}`" if isinstance(target, float) else f"\nTarget: {target}"
+            
+        # Add Netting/Stack Info if available (Playground specific)
+        netting = context.get("netting_info")
+        stacks = context.get("stack_info")
+        
+        if netting:
+            base_msg += f"\n\n**Netting Details**:\n```\n{netting}\n```"
+        if stacks:
+             base_msg += f"\n**Active Stacks**:\n```\n{stacks}\n```"
+             
+        # Fallback for other contexts
+        if not netting and not stacks:
+             base_msg += f"\nContext: `{context}`"
+             
+        message = base_msg
+
     payload = {"content": message}
     try:
         response = requests.post(webhook, json=payload, timeout=10)

@@ -546,6 +546,8 @@ class RealtimeEngine:
             return f"{color_map['GREEN']}EXIT_LONG{color_map['RESET']}"
         elif action == "EXIT_SHORT":
             return f"{color_map['RED']}EXIT_SHORT{color_map['RESET']}"
+        elif action == "NET_ZERO":
+            return f"{color_map['YELLOW']}NET_ZERO{color_map['RESET']}"
         return f"{color_map['YELLOW']}HOLD{color_map['RESET']}"
 
 
