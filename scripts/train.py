@@ -14,8 +14,17 @@ import tempfile
 import pandas as pd
 
 # 1. Setup (Path, Logging, Config)
-import _setup
-from _setup import DEFAULT_STATE_DB
+# Ensure src is in path for standalone execution
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from config.paths import DEFAULT_STATE_DB
+from config.env import load_env
+
+load_env()
 
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 from optimization.engine import optimize_strategy

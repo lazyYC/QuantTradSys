@@ -4,8 +4,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # 1. Setup (Path, Logging, Config)
-import _setup
-from _setup import DEFAULT_MARKET_DB
+# Ensure src is in path for standalone execution
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
+import sys
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from config.paths import DEFAULT_MARKET_DB
+from utils.logging import setup_logging
+# Simple logging setup for rollback
+setup_logging()
 
 from utils.symbols import canonicalize_symbol
 from utils.formatting import format_ts

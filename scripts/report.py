@@ -14,10 +14,17 @@ import pandas as pd
 import sqlite3
 
 # 1. Setup (Path, Logging, Config)
-import _setup
-from _setup import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
+# Ensure src is in path for standalone execution
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-FAVICON_PATH = _setup.SRC_DIR / "config" / "favicon.png"
+from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
+from utils.logging import setup_logging
+
+FAVICON_PATH = SRC_DIR / "config" / "favicon.png"
 
 from persistence.param_store import load_strategy_params
 from persistence.trade_store import load_metrics, load_trades
@@ -40,7 +47,7 @@ LOGGER = logging.getLogger(__name__)
 
 def main() -> None:
     args = parse_args()
-    _setup.setup_logging()
+    setup_logging()
     
     # 1. Load Strategy Params & Metadata
     # We load this FIRST to get symbol/timeframe
