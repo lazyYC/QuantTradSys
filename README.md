@@ -6,20 +6,20 @@ star_xgb 為核心的加密量化策略專案，涵蓋資料擷取、Optuna 調�
 
 `
 QuantTradSys/
-├── scripts/                     # 指令入口皆以 PYTHONPATH=src 執行
-│   ├── backfill_ohlcv.py         # CCXT 拉取 / 回補資料（含 iso_ts 欄位）
-│   ├── train.py                  # 策略訓練與 Optuna 調參 (通用)
-│   ├── report.py                 # 績效報表輸出 (通用)
-│   ├── run_scheduler.py          # 即時排程器 (通用)
-│   └── ...                       # 其他工具腳本
+├── scripts/
+│   ├── backfill_ohlcv.py   
+│   ├── train.py   
+│   ├── report.py
+│   ├── run_scheduler.py
+│   └── ...                       
 ├── src/
-│   ├── data_pipeline/            # CCXT × SQLite I/O
-│   ├── optimization/             # Optuna 搜尋 + nested split
-│   ├── persistence/              # 參數 / 交易 / 績效 / 狀態儲存
-│   ├── strategies/               # 策略實作 (如 star_xgb)
-│   ├── reporting/                # 報表組件
+│   ├── data_pipeline/
+│   ├── optimization/
+│   ├── persistence/
+│   ├── strategies/
+│   ├── reporting/
 │   └── ...
-├── storage/                     # SQLite、報表輸出、Optuna DB
+├── storage/
 └── ...
 ```
 
@@ -84,21 +84,6 @@ python scripts/run_scheduler.py ^
     --exchange binanceusdm
 ```
 
-- 必須指定 `--strategy` 與 `--study` 以載入對應的訓練參數與模型。
+- 指定 `--strategy` 與 `--study` 以載入對應的訓練參數與模型。
 - Scheduler 自動抓資料、產生訊號、並更新 runtime 狀態。
-
-## 資料庫一覽
-
-| DB | 用途 | 主要欄位 | 來源 |
-| --- | --- | --- | --- |
-| storage/market_data.db | OHLCV 快取 | ts, iso_ts, open~volume | backfill_ohlcv.py |
-| storage/strategy_state.db | 策略參數 / 交易 / 績效 / runtime | strategy_params, strategy_trades, strategy_metrics, strategy_runtime | train.py, report.py, run_scheduler.py |
-| storage/optuna_*.db | Optuna Study | trials, trial_params, trial_values | train.py |
-
-## 開發守則
-
-- 註解使用繁體中文；日誌使用英文，INFO 記錄重要事件、DEBUG 用於調試。
-- 資料/訊號邏輯盡量採純函式以利測試與重構。
-- 策略實作放入 src/strategies，並共用統一的接口。
-- 中英文檔案請以 UTF-8 儲存，查看建議使用 scripts/cat_utf8.ps1 或設定 PowerShell OutputEncoding。
 
