@@ -1,20 +1,10 @@
 
 import os
-import sys
 import pytest
 from unittest.mock import MagicMock, patch
-from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
 
-# Setup paths
-ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = ROOT / "src"
-
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-# Import AFTER path setup
 from engine.realtime import RealtimeEngine
 from persistence.param_store import StrategyRecord
 from notifier.dispatcher import dispatch_signal

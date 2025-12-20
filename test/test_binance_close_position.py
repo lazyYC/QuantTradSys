@@ -8,15 +8,6 @@ import os
 from pprint import pformat
 from typing import Optional
 
-import sys
-from pathlib import Path
-
-# Adjusted for test/test_binance_close_position.py
-ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
 from brokers.binance import (
     BinanceAPIError,
     BinanceCredentials,
