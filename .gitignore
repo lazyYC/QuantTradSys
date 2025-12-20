@@ -87,4 +87,5 @@ config/.env
 /reports/
 /.gemini/
 sqlite_exec.py
+/.agent/
 
