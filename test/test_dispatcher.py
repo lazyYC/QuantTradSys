@@ -26,7 +26,7 @@ class DispatcherTests(TestCase):
         result = dispatcher.dispatch_signal(
             "ENTER_LONG",
             {"symbol": "BTC/USDT:USDT", "price": 30000.0},
-            env_path=SRC_DIR / "config" / ".env",
+            env_path="config/.env",
         )
         mock_execute.assert_called_once()
         self.assertEqual(mock_post.call_count, 2)

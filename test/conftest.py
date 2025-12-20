@@ -2,13 +2,6 @@
 import os
 import pytest
 import logging
-from pathlib import Path
-
-# Ensure src is in path for imports
-import sys
-ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT / "src"
-# sys.path hack not needed if pip install -e . is done, but for safety in test setup we rely on environment.
 
 from config.env import load_env
 from brokers.binance import BinanceCredentials, BinanceUSDMClient
@@ -50,11 +43,13 @@ def binance_client(env_setup, pytestconfig):
     if not pytestconfig.getoption("--run-live"):
         pytest.skip("Skipping live client creation without --run-live")
 
-    api_key = os.getenv("BINANCE_API_KEY")
-    api_secret = os.getenv("BINANCE_API_SECRET")
+    api_key = os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_API_KEY_ID")
+    api_secret = os.getenv("BINANCE_API_SECRET") or os.getenv("BINANCE_PRIVATE_KEY")
     
     if not api_key or not api_secret:
-        pytest.fail("BINANCE_API_KEY or BINANCE_API_SECRET not found in env")
+        # Debug info
+        env_loc = os.getenv("QTS_ENV_PATH", "default")
+        pytest.fail(f"Credentials not found. Checked BINANCE_API_KEY/ID. Env path: {env_loc}")
 
     # Use sandbox by default for tests unless explicitly overridden in env?
     # User likely wants to test on whatever env is configured (Testnet or Real).
