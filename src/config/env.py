@@ -9,7 +9,7 @@ from typing import Dict, Iterable, Optional, Union
 
 ENV_OVERRIDE_KEY = "QTS_ENV_PATH"
 MODULE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = MODULE_DIR.parents[2]
+PROJECT_ROOT = MODULE_DIR.parents[1]
 DEFAULT_ENV_PATH = MODULE_DIR / ".env"
 
 PathLike = Union[str, Path]
