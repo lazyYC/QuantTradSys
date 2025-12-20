@@ -13,10 +13,11 @@ import pandas as pd
 
 from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
 from persistence.param_store import load_strategy_params
-from persistence.trade_store import load_metrics, load_trades
 from strategies.base import BaseStrategy
 from strategies.loader import load_strategy_class
 from data_pipeline.reader import read_ohlcv
+from utils.data_utils import filter_by_time
+from utils.trading import build_equity_from_trades
 from reporting.tables import (
     create_metrics_table,
     create_params_table,
@@ -36,7 +37,7 @@ class ReportContext:
     ohlcv_db_path: Path
     output_path: Path
     title: Optional[str] = None
-    rerun: bool = False
+    # rerun: bool = True  # Removed, always True now implicitly
     
     # Time Boundaries
     start_ts: Optional[pd.Timestamp] = None
@@ -76,7 +77,6 @@ class ReportEngine:
             ohlcv_db_path=Path(args.ohlcv_db),
             output_path=Path(args.output),
             title=args.title,
-            rerun=args.rerun,
             start_ts=start_ts,
             end_ts=end_ts,
         )
@@ -89,11 +89,11 @@ class ReportEngine:
         # 1. Prepare Metadata (Params, Symbol, Timeframe)
         self._prepare_metadata()
         
-        # 2. Prepare Data (Candles, Trades, Metrics)
+        # 2. Prepare Data (Only Candles, skipping DB trades/metrics)
         self._prepare_data()
         
-        # 3. Rerun Backtest if needed
-        self._run_backtest_if_needed()
+        # 3. Always Run Backtest
+        self._run_backtest()
         
         # 4. Generate Report (Equity, Figures, HTML)
         self._generate_report()
@@ -123,7 +123,7 @@ class ReportEngine:
             sys.exit(1)
 
     def _prepare_data(self) -> None:
-        """Load OHLCV and existing Trades/Metrics from DB."""
+        """Load OHLCV data."""
         # Load Candles
         self.ctx.candles = read_ohlcv(
             self.ctx.ohlcv_db_path,
@@ -135,62 +135,13 @@ class ReportEngine:
         if self.ctx.candles.empty:
             LOGGER.error(f"No OHLCV data found for {self.ctx.symbol} {self.ctx.timeframe}.")
             sys.exit(1)
-
-        # Skip DB load if rerun is forced
-        if self.ctx.rerun:
-            return
-
-        # Load Existing Trades & Metrics
-        metric_frames = []
-        trade_frames = []
-        
-        for ds in ("train", "valid", "test"):
-            # Load Metrics
-            m_df = load_metrics(
-                self.ctx.store_path,
-                strategy=self.ctx.strategy_name,
-                study=self.ctx.study_name,
-                dataset=ds,
-                symbol=self.ctx.symbol,
-                timeframe=self.ctx.timeframe,
-            )
-            if not m_df.empty:
-                m_filtered = self._filter_by_time(m_df, "created_at")
-                if not m_filtered.empty:
-                    m_latest = m_filtered.sort_values("created_at", ascending=False).head(1).copy()
-                    m_latest["dataset"] = ds
-                    metric_frames.append(m_latest)
-
-            # Load Trades
-            t_df = load_trades(
-                self.ctx.store_path,
-                strategy=self.ctx.strategy_name,
-                study=self.ctx.study_name,
-                dataset=ds,
-                symbol=self.ctx.symbol,
-                timeframe=self.ctx.timeframe,
-            )
-            if not t_df.empty:
-                t_filtered = self._filter_by_time(t_df, "entry_time") # Basic filter
-                t_filtered = self._filter_by_time(t_filtered, "exit_time") # Ensure exit info valid
-                if not t_filtered.empty:
-                    t_local = t_filtered.copy()
-                    t_local["dataset"] = ds
-                    trade_frames.append(t_local)
-
-        if metric_frames:
-            self.ctx.metrics_df = pd.concat(metric_frames, ignore_index=True)
-        if trade_frames:
-            self.ctx.trades_df = pd.concat(trade_frames, ignore_index=True)
-            if "entry_time" in self.ctx.trades_df.columns:
-                self.ctx.trades_df = self.ctx.trades_df.sort_values("entry_time").reset_index(drop=True)
-
-    def _run_backtest_if_needed(self) -> None:
-        """Rerun backtest if data missing or rerun requested."""
-        if not self.ctx.rerun and not self.ctx.trades_df.empty and not self.ctx.metrics_df.empty:
-            return
             
-        LOGGER.info("Running backtest..." if self.ctx.rerun else "No saved data found, running backtest...")
+        # NOTE: We intentionally do NOT load trades/metrics. 
+        # We always rerun the backtest to ensure consistency with current logic/data.
+
+    def _run_backtest(self) -> None:
+        """Always rerun backtest."""
+        LOGGER.info("Running backtest to generate report data...")
 
         # Load Strategy
         try:
@@ -217,8 +168,8 @@ class ReportEngine:
     def _generate_report(self) -> None:
         """Calculate Equity, Build Figures, Write HTML."""
         # 1. Build Equity Curve
-        self.ctx.equity_df = self._build_equity_from_trades(self.ctx.trades_df, self.ctx.candles)
-        self.ctx.equity_df = self._filter_by_time(self.ctx.equity_df, "timestamp")
+        self.ctx.equity_df = build_equity_from_trades(self.ctx.trades_df, self.ctx.candles)
+        self.ctx.equity_df = filter_by_time(self.ctx.equity_df, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
 
         # 2. Build Sections (Background colors for datasets)
         self._build_sections()
@@ -232,20 +183,8 @@ class ReportEngine:
         LOGGER.info(f"Report saved to {self.ctx.output_path}")
 
     # ----------------------------------------------------------------
-    # Internal Logic (Moved from report.py)
+    # Internal Logic
     # ----------------------------------------------------------------
-
-    def _filter_by_time(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
-        if df.empty or column not in df.columns:
-            return df
-        frame = df.copy()
-        frame[column] = pd.to_datetime(frame[column], utc=True, errors="coerce")
-        frame = frame.dropna(subset=[column])
-        if self.ctx.start_ts is not None:
-            frame = frame[frame[column] >= self.ctx.start_ts]
-        if self.ctx.end_ts is not None:
-            frame = frame[frame[column] <= self.ctx.end_ts]
-        return frame.reset_index(drop=True)
 
     def _build_sections(self) -> None:
         if self.ctx.metrics_df.empty:
@@ -267,65 +206,6 @@ class ReportEngine:
                     "start": section_start,
                     "end": section_end,
                 })
-
-    def _build_equity_from_trades(self, trades: pd.DataFrame, candles: pd.DataFrame = None) -> pd.DataFrame:
-        # Ported logic from original report.py
-        if candles is None or candles.empty:
-             # Fallback simple
-             if trades.empty or "return" not in trades.columns:
-                return pd.DataFrame(columns=["timestamp", "equity"])
-             closed = trades.dropna(subset=["exit_time", "return"]).copy()
-             if closed.empty:
-                return pd.DataFrame(columns=["timestamp", "equity"])
-             closed = closed.sort_values("exit_time")
-             returns = pd.to_numeric(closed["return"], errors="coerce").fillna(0.0)
-             equity_values = (1 + returns).cumprod()
-             return pd.DataFrame({"timestamp": closed["exit_time"], "equity": equity_values})
-
-        if trades.empty:
-             return pd.DataFrame({"timestamp": candles["timestamp"], "equity": 1.0})
-
-        # Align times
-        df = candles[["timestamp", "close"]].copy().sort_values("timestamp").drop_duplicates("timestamp")
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df = df.set_index("timestamp").sort_index()
-        # df["close"] = pd.to_numeric(df["close"], errors="coerce").ffill() # Assuming already float or handled
-
-        longs = trades[trades["side"] == "LONG"]
-        shorts = trades[trades["side"] == "SHORT"]
-
-        def _agg_counts(frame, sign, col):
-            if frame.empty: return None
-            times = pd.to_datetime(frame[col], utc=True)
-            counts = times.value_counts()
-            return counts * sign
-
-        l_in = _agg_counts(longs, 1, "entry_time")
-        l_out = _agg_counts(longs, -1, "exit_time")
-        s_in = _agg_counts(shorts, -1, "entry_time")
-        s_out = _agg_counts(shorts, 1, "exit_time")
-
-        all_changes = pd.concat([l_in, l_out, s_in, s_out], axis=0)
-        # Handle all None
-        if all_changes.empty:
-             return pd.DataFrame({"timestamp": candles["timestamp"], "equity": 1.0})
-             
-        all_changes = all_changes.groupby(level=0).sum()
-        
-        aligned_changes = all_changes.reindex(df.index, fill_value=0)
-        current_pos = aligned_changes.cumsum()
-        exposure = current_pos.shift(1).fillna(0)
-        
-        price_ret = df["close"].pct_change().fillna(0)
-        strat_ret = exposure * price_ret
-        
-        cost_rate = 0.001 
-        volume = aligned_changes.abs()
-        costs = volume * cost_rate
-        total_ret = strat_ret - costs
-        
-        equity = (1 + total_ret).cumprod()
-        return pd.DataFrame({"timestamp": equity.index, "equity": equity.values})
 
     def _collect_figures(self) -> List[Tuple[str, object]]:
         figures = []
@@ -400,12 +280,7 @@ class ReportEngine:
     def _write_html(self, figures: List[Tuple[str, object]], output: Path, title: str) -> None:
         # Determine Facicon Path relation to output
         favicon_href = None
-        # Assuming run from root, so we know where src is
-        # Actually prefer explicit SRC_DIR pass or resolve relative
-        # Simplification: use generic or embed?
-        # Let's try to resolve like original script
         try:
-             # Hacky: Assume engine.py is in src/reporting/
              src_dir = Path(__file__).resolve().parent.parent
              favicon_path = src_dir / "config" / "favicon.png"
              if favicon_path.exists():

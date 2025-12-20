@@ -94,4 +94,19 @@ def dataframe_to_rows(df: pd.DataFrame) -> list[tuple]:
     return rows
 
 
-__all__ = ["prepare_ohlcv_frame", "timeframe_to_offset", "dataframe_to_rows"]
+
+def filter_by_time(df: pd.DataFrame, column: str, start_ts: pd.Timestamp | None, end_ts: pd.Timestamp | None) -> pd.DataFrame:
+    """Filter DataFrame by a datetime column between start_ts and end_ts (inclusive)."""
+    if df.empty or column not in df.columns:
+        return df
+    frame = df.copy()
+    frame[column] = pd.to_datetime(frame[column], utc=True, errors="coerce")
+    frame = frame.dropna(subset=[column])
+    if start_ts is not None:
+        frame = frame[frame[column] >= start_ts]
+    if end_ts is not None:
+        frame = frame[frame[column] <= end_ts]
+    return frame.reset_index(drop=True)
+
+
+__all__ = ["prepare_ohlcv_frame", "timeframe_to_offset", "dataframe_to_rows", "filter_by_time"]

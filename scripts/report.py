@@ -43,7 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ohlcv-db", default=DEFAULT_MARKET_DB)
     parser.add_argument("--output", default="reports/report.html")
     parser.add_argument("--title", help="Report Title")
-    parser.add_argument("--rerun", action="store_true", help="Force rerun backtest")
     parser.add_argument("--start", help="Start Date (ISO)")
     parser.add_argument("--end", help="End Date (ISO)")
     return parser.parse_args()
