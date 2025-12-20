@@ -5,12 +5,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # 1. Setup (Path, Logging, Config)
+# 1. Setup (Path, Logging, Config)
 # Ensure src is in path for standalone execution
-CURRENT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CURRENT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# Path hack removed - dependent on pip install -e .
 
 from config.paths import DEFAULT_MARKET_DB
 from utils.logging import setup_logging
