@@ -177,6 +177,7 @@ def execute_trading(
                 ratio=_load_order_ratio(broker.name),
                 max_notional=_load_max_notional(broker.name),
                 scale=context.get("scale", 1.0),
+                leverage=float(context.get("leverage", 1.0)),
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available", broker_label)
@@ -210,6 +211,7 @@ def execute_trading(
                     ratio=_load_order_ratio(broker.name),
                     max_notional=_load_max_notional(broker.name),
                     scale=float(scale),
+                    leverage=float(context.get("leverage", 1.0)),
                 )
                 if notional <= 0:
                     LOGGER.warning("%s partial exit skipped: calculated notional is zero", broker_label)
@@ -572,7 +574,7 @@ def format_alpaca_symbol(symbol: str) -> str:
 
 
 def _resolve_order_notional(
-    broker: TradingBrokerAdapter, *, ratio: float, max_notional: Optional[float], scale: float = 1.0
+    broker: TradingBrokerAdapter, *, ratio: float, max_notional: Optional[float], scale: float = 1.0, leverage: float = 1.0
 ) -> float:
     try:
         account = broker.account_overview()
@@ -592,14 +594,14 @@ def _resolve_order_notional(
     if broker.name == "alpaca":
         notional = _resolve_alpaca_notional(account, ratio)
     elif broker.name == "binance":
-        notional = _resolve_binance_notional(account, ratio)
+        notional = _resolve_binance_notional(account, ratio, leverage=leverage)
     else:
         LOGGER.error("Unsupported broker %s for notional resolution", broker.name)
         return 0.0
 
     LOGGER.info(
-        "Resolved notional for %s: ratio=%.4f notional=%.2f (before scale/clamp)",
-        broker.name.upper(), ratio, notional
+        "Resolved notional for %s: ratio=%.4f leverage=%.1f notional=%.2f (before scale/clamp)",
+        broker.name.upper(), ratio, leverage, notional
     )
 
     if notional <= 0.0:
@@ -642,7 +644,7 @@ def _resolve_alpaca_notional(account: Dict[str, Any], ratio: float) -> float:
     return 0.0
 
 
-def _resolve_binance_notional(account: Dict[str, Any], ratio: float) -> float:
+def _resolve_binance_notional(account: Dict[str, Any], ratio: float, leverage: float = 1.0) -> float:
     candidates = []
     account_info = account.get("info") or {}
     
@@ -677,9 +679,9 @@ def _resolve_binance_notional(account: Dict[str, Any], ratio: float) -> float:
             LOGGER.debug("Unable to parse Binance balance value: %s", raw)
             continue
         if amount > 0:
-            LOGGER.info("Using Binance %s=%.2f for sizing", key, amount)
-            return amount * ratio
-
+            LOGGER.info("Using Binance %s=%.2f leverage=%.1f ratio=%.2f for sizing", key, amount, leverage, ratio)
+            return amount * leverage * ratio
+            
     LOGGER.info("Binance account has no USDT available for trading")
     return 0.0
 
