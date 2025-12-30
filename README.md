@@ -6,21 +6,33 @@ star_xgb 為核心的加密量化策略專案，涵蓋資料擷取、Optuna 調�
 
 ```
 QuantTradSys/
-├── scripts/
-│   ├── backfill_ohlcv.py   
-│   ├── train.py   
-│   ├── report.py
-│   ├── run_scheduler.py
-│   └── ...                       
+├── scripts/                  # CLI Entry Points
+│   ├── backfill_ohlcv.py     # 歷史資料回補 (CCXT -> Postgres)
+│   ├── train.py              # 策略訓練與最佳化 (Training Engine)
+│   ├── report.py             # 績效報告產生 (Reporting Engine)
+│   └── run_scheduler.py      # 即時交易排程 (Realtime Engine)
 ├── src/
-│   ├── data_pipeline/
-│   ├── optimization/
-│   ├── persistence/
-│   ├── strategies/
-│   ├── reporting/
-│   └── ...
-├── storage/
-└── ...
+│   ├── config/               # 環境變數與路徑配置
+│   ├── database/             # 資料庫核心 (PostgreSQL)
+│   │   ├── connection.py     # 連線與 Session 管理
+│   │   └── schema.py         # SQLAlchemy ORM 定義 (OHLCV, Trade, Param...)
+│   ├── persistence/          # 資料存取層 (Repository Pattern)
+│   │   ├── market_store.py   # OHLCV 資料存取
+│   │   ├── trade_store.py    # 交易紀錄存取
+│   │   ├── param_store.py    # 策略參數存取
+│   │   └── runtime_store.py  # 即時狀態存取
+│   ├── data_pipeline/        # 資料擷取與清理
+│   │   ├── ccxt_fetcher.py   # CCXT 介面 (Fetch & Sync)
+│   │   └── reader.py         # 資料讀取 (從 MarketStore)
+│   ├── strategies/           # 策略實作目錄
+│   │   ├── base.py           # 策略基底類別
+│   │   └── star_xgb/         # 範例策略
+│   ├── training/             # 訓練引擎 (Workflow)
+│   ├── reporting/            # 報告引擎 (Workflow)
+│   ├── engine/               # 即時引擎 (Realtime Workflow)
+│   └── utils/                # 通用工具 (Logging, Formatting...)
+├── storage/                  # 包含 logs 與 lock files (DB 已遷移至雲端)
+└── README.md
 ```
 
 ## 安裝與環境
@@ -68,11 +80,7 @@ python scripts/report.py --strategy star_xgb --study test3 --dataset all --start
 使用 `scripts/run_scheduler.py` 啟動即時交易引擎。
 
 ```powershell
-python scripts/run_scheduler.py ^
-    --strategy star_xgb --study test ^
-    --symbol BTC/USDT:USDT --timeframe 5m ^
-    --lookback-days 60 ^
-    --exchange binanceusdm
+python scripts/run_scheduler.py --strategy star_xgb --study test --symbol BTC/USDT:USDT --timeframe 5m --lookback-days 60 --exchange binanceusdm
 ```
 
 - 指定 `--strategy` 與 `--study` 以載入對應的訓練參數與模型。
