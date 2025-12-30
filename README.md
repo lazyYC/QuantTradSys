@@ -29,14 +29,16 @@ QuantTradSys/
 python -m venv .venv
 . .venv/Scripts/Activate
 pip install -r requirements.txt
-$env:PYTHONPATH = 'src'
+python -m venv .venv
+. .venv/Scripts/Activate
+pip install -r requirements.txt
+pip install -e .  # 安裝為開發模式，自動處理路徑
 ```
 
 ## 資料回補
 
 ```powershell
-python scripts/backfill_ohlcv.py BTC/USDT:USDT 5m 365 ^
-    --db storage/market_data.db --exchange binanceusdm --prune
+python scripts/backfill_ohlcv.py BTC/USDT:USDT 5m 365 --exchange binanceusdm --prune
 ```
 
 ## 策略訓練 (Train)
@@ -44,14 +46,7 @@ python scripts/backfill_ohlcv.py BTC/USDT:USDT 5m 365 ^
 使用 `scripts/train.py` 進行策略訓練與參數搜尋。
 
 ```powershell
-python scripts/train.py ^
-    --strategy star_xgb ^
-    --study-name test ^
-    --symbol BTC/USDT:USDT --timeframe 5m ^
-    --lookback-days 360 --test-days 30 ^
-    --n-trials 50 ^
-    --n-seeds 5 ^ # 每個 trial 會用幾個 seed 去訓練
-    --storage sqlite:///storage/optuna_studies.db
+python scripts/train.py --strategy star_xgb --study-name test --symbol BTC/USDT:USDT --timeframe 5m --lookback-days 360 --test-days 30 --n-trials 50 --n-seeds 5 # 每個 trial 會用幾個 seed 去訓練
 ```
 
 - `--strategy`: 策略演算法名稱 (如 `star_xgb`)。
@@ -62,11 +57,7 @@ python scripts/train.py ^
 使用 `scripts/report.py` 產生詳細回測報告。
 
 ```powershell
-python scripts/report.py ^
-    --strategy star_xgb --study test3 ^
-    --dataset all ^
-    --start 2024-01-01 --end 2024-12-31 ^
-    --output reports/report.html
+python scripts/report.py --strategy star_xgb --study test3 --dataset all --start 2024-01-01 --end 2024-12-31 --output reports/report.html
 ```
 
 - `--dataset`: 選擇報告資料集 (`train`, `valid`, `test`, `all`)。
