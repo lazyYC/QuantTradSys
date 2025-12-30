@@ -43,8 +43,3 @@
 3. 回測與績效報告產出（HTML / Dashboard）。
 4. 即時訊號與通知（排程器）。
 5. 持續監控與再訓練。
-
-## 中文檔案檢視（UTF‑8）
-
-- 透過 `scripts/cat_utf8.ps1` 或設定 PowerShell `OutputEncoding` 以免亂碼。
-- 檔案內容搜尋建議使用 `rg`，需查看時再以 UTF‑8 方式顯示。 
