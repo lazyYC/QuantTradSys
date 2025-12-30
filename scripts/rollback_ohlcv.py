@@ -1,131 +1,82 @@
 import argparse
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
+from datetime import datetime
+import sys
 
-# 1. Setup (Path, Logging, Config)
-# Ensure src is in path for standalone execution
+# 1. Setup Path
 CURRENT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CURRENT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
-import sys
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from config.paths import DEFAULT_MARKET_DB
+from persistence.market_store import MarketDataStore
 from utils.logging import setup_logging
-# Simple logging setup for rollback
-setup_logging()
-
 from utils.symbols import canonicalize_symbol
 from utils.formatting import format_ts
 
+# Setup Logging
+setup_logging()
+
 MILLIS_PER_DAY = 86_400_000
 
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Rollback recent OHLCV data from the SQLite store (Delete recent N days/candles).")
-    parser.add_argument("--db", type=Path, default=DEFAULT_MARKET_DB, help="SQLite database path")
+    parser = argparse.ArgumentParser(description="Rollback recent OHLCV data from the Market Store.")
     parser.add_argument("--symbol", required=True, help="Trading symbol, e.g. BTC/USDT")
     parser.add_argument("--timeframe", required=True, help="Timeframe, e.g. 5m")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--days", type=float, help="Rollback the most recent N days of candles")
     group.add_argument("--limit", type=int, help="Rollback the most recent N candles")
-    parser.add_argument("--dry-run", action="store_true", help="Show how many rows would be deleted without modifying the DB")
+    parser.add_argument("--dry-run", action="store_true", help="Just print what would be done (Not fully supported by Store yet, prints expected action)")
     args = parser.parse_args()
 
-    conn = sqlite3.connect(args.db)
-    try:
-        symbol = canonicalize_symbol(args.symbol)
-        if args.days is not None:
-            rollback_recent_days(conn, symbol, args.timeframe, args.days, args.dry_run)
+    store = MarketDataStore()
+    symbol = canonicalize_symbol(args.symbol)
+    
+    if args.dry_run:
+        print(f"[DRY-RUN] Would delete data for {symbol} {args.timeframe}")
+        if args.days:
+             print(f"  Mode: Recent {args.days} days")
         else:
-            rollback_recent_limit(conn, symbol, args.timeframe, args.limit, args.dry_run)
-    finally:
-        conn.close()
+             print(f"  Mode: Recent {args.limit} candles")
+        return
+
+    if args.days is not None:
+        rollback_recent_days(store, symbol, args.timeframe, args.days)
+    else:
+        rollback_recent_limit(store, symbol, args.timeframe, args.limit)
 
 
 def rollback_recent_days(
-    conn: sqlite3.Connection, symbol: str, timeframe: str, days: float, dry_run: bool
+    store: MarketDataStore, symbol: str, timeframe: str, days: float
 ) -> int:
     if days <= 0:
         raise ValueError("days must be positive")
-    cursor = conn.execute(
-        "SELECT MIN(ts), MAX(ts) FROM ohlcv WHERE symbol = ? AND timeframe = ?",
-        (symbol, timeframe),
-    )
-    row = cursor.fetchone()
-    if not row or row[1] is None:
+    
+    # 1. Get max timestamp
+    max_ts = store.get_latest_timestamp(symbol, timeframe)
+    if max_ts is None:
         print("No data found for the specified symbol/timeframe.")
         return 0
-    min_ts, max_ts = row
+        
     cutoff = int(max_ts - days * MILLIS_PER_DAY)
-    if cutoff <= min_ts:
-        cutoff = min_ts
     print(f"Rolling back rows with ts >= {cutoff} ({format_ts(cutoff)})")
-    if dry_run:
-        cursor = conn.execute(
-            "SELECT COUNT(*) FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts >= ?",
-            (symbol, timeframe, cutoff),
-        )
-        count = cursor.fetchone()[0]
-        print(f"[dry-run] Rows that would be deleted: {count}")
-        return 0
-    cursor = conn.execute(
-        "DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND ts >= ?",
-        (symbol, timeframe, cutoff),
-    )
-    conn.commit()
-    print(f"Deleted {cursor.rowcount} rows.")
-    return cursor.rowcount
+    
+    count = store.delete_recent(symbol, timeframe, cutoff)
+    print(f"Deleted {count} rows.")
+    return count
 
 
 def rollback_recent_limit(
-    conn: sqlite3.Connection, symbol: str, timeframe: str, limit: int, dry_run: bool
+    store: MarketDataStore, symbol: str, timeframe: str, limit: int
 ) -> int:
     if limit <= 0:
         raise ValueError("limit must be positive")
-    cursor = conn.execute(
-        "SELECT COUNT(*) FROM ohlcv WHERE symbol = ? AND timeframe = ?",
-        (symbol, timeframe),
-    )
-    total = cursor.fetchone()[0]
-    if total == 0:
-        print("No data found for the specified symbol/timeframe.")
-        return 0
-    if limit >= total:
-        cutoff = -1
-    else:
-        cursor = conn.execute(
-            "SELECT ts FROM ohlcv WHERE symbol = ? AND timeframe = ? ORDER BY ts DESC LIMIT 1 OFFSET ?",
-            (symbol, timeframe, limit - 1),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            cutoff = -1
-        else:
-            cutoff = int(row[0])
-    condition = "ts >= ?" if cutoff >= 0 else "1=1"
-    params = (symbol, timeframe, cutoff) if cutoff >= 0 else (symbol, timeframe)
-    if cutoff >= 0:
-        print(f"Rolling back rows with ts >= {cutoff} ({format_ts(cutoff)})")
-    else:
-        print("Deleting all rows for the specified symbol/timeframe.")
-    query = (
-        f"SELECT COUNT(*) FROM ohlcv WHERE symbol = ? AND timeframe = ? AND {condition}"
-    )
-    cursor = conn.execute(query, params)
-    count = cursor.fetchone()[0]
-    if dry_run:
-        print(f"[dry-run] Rows that would be deleted: {count}")
-        return 0
-    delete_query = (
-        f"DELETE FROM ohlcv WHERE symbol = ? AND timeframe = ? AND {condition}"
-    )
-    cursor = conn.execute(delete_query, params)
-    conn.commit()
-    print(f"Deleted {cursor.rowcount} rows.")
-    return cursor.rowcount
+    
+    print(f"Deleting the {limit} most recent rows...")
+    count = store.delete_tail(symbol, timeframe, limit)
+    print(f"Deleted {count} rows.")
+    return count
 
 
 if __name__ == "__main__":

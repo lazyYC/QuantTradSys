@@ -9,20 +9,21 @@ from pathlib import Path
 # Ensure src is in path for standalone execution
 # Path hack removed - dependent on pip install -e .
 
-from config.paths import DEFAULT_MARKET_DB
+# from config.paths import DEFAULT_MARKET_DB # Removed
 from utils.logging import setup_logging
 
+from persistence.market_store import MarketDataStore
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
 
 LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Backfill OHLCV data into SQLite store")
+    parser = argparse.ArgumentParser(description="Backfill OHLCV data into Market Store")
     parser.add_argument("symbol", help="symbol, e.g. BTC/USDT:USDT")
     parser.add_argument("timeframe", help="timeframe, e.g. 5m")
     parser.add_argument("lookback_days", type=int, help="days to backfill")
-    parser.add_argument("--db", type=Path, default=DEFAULT_MARKET_DB, help="SQLite database path")
+    # parser.add_argument("--db", type=Path, default=DEFAULT_MARKET_DB, help="SQLite database path") # Deprecated
     parser.add_argument("--exchange", default="binanceusdm", help="Exchange id supported by ccxt")
     args = parser.parse_args()
 
@@ -30,12 +31,14 @@ def main() -> None:
     LOGGER.info("Fetching %s %s for %s days", args.symbol, args.timeframe, args.lookback_days)
     
     # Use db_path to let the fetcher handle storage, gap filling, and incremental updates
+    store = MarketDataStore()
+    
     fetch_yearly_ohlcv(
         symbol=args.symbol,
         timeframe=args.timeframe,
         exchange_id=args.exchange,
         lookback_days=args.lookback_days,
-        db_path=args.db,
+        market_store=store,
         prune_history=False,
     )
 
