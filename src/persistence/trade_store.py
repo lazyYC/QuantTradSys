@@ -1,35 +1,24 @@
+"""
+Trade Store.
+Encapsulates Strategy Trades and Metrics persistence using SQLAlchemy (PostgreSQL).
+"""
 import logging
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Mapping, Optional
 
 import pandas as pd
+from sqlalchemy import select, delete
+from sqlalchemy.dialects.postgresql import insert
+
+from database.connection import get_session, get_engine
+from database.schema import StrategyTrade, StrategyMetric
 
 LOGGER = logging.getLogger(__name__)
 
 
-def _query_dataframe(
-    conn: sqlite3.Connection, query: str, params: Sequence[object]
-) -> pd.DataFrame:
-    """以 pandas 讀取查詢結果並轉換時間欄位。"""
-    df = pd.read_sql_query(query, conn, params=params)
-    time_cols = [
-        col
-        for col in df.columns
-        if col.endswith("_time")
-        or col.endswith("_at")
-        or col.endswith("_start")
-        or col.endswith("_end")
-    ]
-    for col in time_cols:
-        df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
-    return df
-
-
 def load_trades(
-    db_path: Path,
-    # *,
+    db_path: Path, # Deprecated but kept for signature compatibility (unused)
     strategy: str,
     study: Optional[str] = None,
     dataset: Optional[str] = None,
@@ -37,34 +26,33 @@ def load_trades(
     timeframe: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> pd.DataFrame:
-    """讀取指定條件的交易紀錄。"""
-    conn = _ensure_connection(db_path)
-    filters = ["strategy = ?"]
-    params: list[object] = [strategy]
+    """Read trades matching filters."""
+    stmt = select(StrategyTrade).where(StrategyTrade.strategy == strategy)
+    
     if study:
-        filters.append("study = ?")
-        params.append(study)
+        stmt = stmt.where(StrategyTrade.study == study)
     if dataset:
-        filters.append("dataset = ?")
-        params.append(dataset)
+        stmt = stmt.where(StrategyTrade.dataset == dataset)
     if symbol:
-        filters.append("symbol = ?")
-        params.append(symbol)
+        stmt = stmt.where(StrategyTrade.symbol == symbol)
     if timeframe:
-        filters.append("timeframe = ?")
-        params.append(timeframe)
+        stmt = stmt.where(StrategyTrade.timeframe == timeframe)
     if run_id:
-        filters.append("run_id = ?")
-        params.append(run_id)
-    where_clause = " AND ".join(filters)
-    query = f"""
-        SELECT *
-        FROM strategy_trades
-        WHERE {where_clause}
-        ORDER BY entry_time
-    """
-    df = _query_dataframe(conn, query, params)
-    conn.close()
+        stmt = stmt.where(StrategyTrade.run_id == run_id)
+        
+    stmt = stmt.order_by(StrategyTrade.entry_time.asc())
+
+    with get_engine().connect() as conn:
+        df = pd.read_sql_query(stmt, conn)
+        
+    if df.empty:
+        return pd.DataFrame()
+
+    # Normalize Columns if needed? SQLAlchemy/Pandas usually handles datetimes well.
+    # Just ensure return_pct maps to 'return' if legacy code expects it
+    if "return_pct" in df.columns:
+        df = df.rename(columns={"return_pct": "return"})
+
     return df
 
 
@@ -77,103 +65,26 @@ def load_metrics(
     timeframe: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> pd.DataFrame:
-    """讀取策略績效摘要供報表使用。"""
-    conn = _ensure_connection(db_path)
-    filters = ["strategy = ?"]
-    params: list[object] = [strategy]
+    """Read metrics matching filters."""
+    stmt = select(StrategyMetric).where(StrategyMetric.strategy == strategy)
+    
     if study:
-        filters.append("study = ?")
-        params.append(study)
+        stmt = stmt.where(StrategyMetric.study == study)
     if dataset:
-        filters.append("dataset = ?")
-        params.append(dataset)
+        stmt = stmt.where(StrategyMetric.dataset == dataset)
     if symbol:
-        filters.append("symbol = ?")
-        params.append(symbol)
+        stmt = stmt.where(StrategyMetric.symbol == symbol)
     if timeframe:
-        filters.append("timeframe = ?")
-        params.append(timeframe)
+        stmt = stmt.where(StrategyMetric.timeframe == timeframe)
     if run_id:
-        filters.append("run_id = ?")
-        params.append(run_id)
-    where_clause = " AND ".join(filters)
-    query = f"""
-        SELECT *
-        FROM strategy_metrics
-        WHERE {where_clause}
-        ORDER BY created_at DESC
-    """
-    df = _query_dataframe(conn, query, params)
-    conn.close()
+        stmt = stmt.where(StrategyMetric.run_id == run_id)
+        
+    stmt = stmt.order_by(StrategyMetric.created_at.desc())
+
+    with get_engine().connect() as conn:
+        df = pd.read_sql_query(stmt, conn)
+        
     return df
-
-
-TRADE_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS strategy_trades (
-    run_id TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    study TEXT NOT NULL,
-    dataset TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    timeframe TEXT NOT NULL,
-    entry_time TEXT NOT NULL,
-    exit_time TEXT NOT NULL,
-    side TEXT NOT NULL,
-    entry_price REAL NOT NULL,
-    exit_price REAL NOT NULL,
-    return REAL NOT NULL,
-    holding_mins REAL NOT NULL,
-    entry_zscore REAL NOT NULL,
-    exit_zscore REAL NOT NULL,
-    exit_reason TEXT NOT NULL,
-    PRIMARY KEY (run_id, dataset, entry_time)
-);
-CREATE INDEX IF NOT EXISTS idx_trades_lookup ON strategy_trades (strategy, study, symbol);
-"""
-
-
-METRIC_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS strategy_metrics (
-    run_id TEXT NOT NULL,
-    strategy TEXT NOT NULL,
-    study TEXT NOT NULL,
-    dataset TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    timeframe TEXT NOT NULL,
-    annualized_return REAL,
-    total_return REAL,
-    sharpe REAL,
-    max_drawdown REAL,
-    win_rate REAL,
-    trades INTEGER,
-    period_start TEXT,
-    period_end TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (run_id, dataset)
-);
-CREATE INDEX IF NOT EXISTS idx_metrics_lookup ON strategy_metrics (strategy, study, symbol);
-"""
-
-
-def _ensure_connection(path: Path) -> sqlite3.Connection:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    with conn:
-        conn.executescript(TRADE_SCHEMA_SQL)
-        conn.executescript(METRIC_SCHEMA_SQL)
-        _ensure_metric_columns(conn)
-    return conn
-
-
-def _ensure_metric_columns(conn: sqlite3.Connection) -> None:
-    cursor = conn.execute("PRAGMA table_info(strategy_metrics)")
-    columns = {row[1] for row in cursor.fetchall()}
-    if "period_start" not in columns:
-        conn.execute("ALTER TABLE strategy_metrics ADD COLUMN period_start TEXT")
-    if "period_end" not in columns:
-        conn.execute("ALTER TABLE strategy_metrics ADD COLUMN period_end TEXT")
 
 
 def save_trades(
@@ -188,76 +99,84 @@ def save_trades(
     metrics: Mapping[str, float],
     run_id: Optional[str] = None,
 ) -> str:
-    """將交易紀錄與對應的 summary metrics 寫入 SQLite。"""
-    conn = _ensure_connection(db_path)
+    """Persist trades and metrics."""
     run_identifier = run_id or datetime.now(timezone.utc).isoformat()
-    with conn:
+    created_at = datetime.now(timezone.utc)
+    
+    with get_session() as session:
+        # 1. Upsert Trades
         if not trades.empty:
-            records = [
-                (
-                    run_identifier,
-                    strategy,
-                    study,
-                    dataset,
-                    symbol,
-                    timeframe,
-                    str(row["entry_time"]),
-                    str(row["exit_time"]),
-                    str(row["side"]),
-                    float(row["entry_price"]),
-                    float(row["exit_price"]),
-                    float(row["return"]),
-                    float(row["holding_mins"]),
-                    float(row["entry_zscore"]),
-                    float(row["exit_zscore"]),
-                    str(row["exit_reason"]),
-                )
-                for _, row in trades.iterrows()
-            ]
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO strategy_trades (
-                    run_id, strategy, study, dataset, symbol, timeframe,
-                    entry_time, exit_time, side, entry_price, exit_price,
-                    return, holding_mins, entry_zscore, exit_zscore, exit_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                records,
+            trade_records = []
+            for _, row in trades.iterrows():
+                # Handle potentially missing or differently named cols from backtest
+                 entry_time = pd.to_datetime(row["entry_time"], utc=True)
+                 exit_time = pd.to_datetime(row["exit_time"], utc=True)
+                 
+                 trade_records.append({
+                     "run_id": run_identifier,
+                     "strategy": strategy,
+                     "study": study,
+                     "dataset": dataset,
+                     "symbol": symbol,
+                     "timeframe": timeframe,
+                     "entry_time": entry_time,
+                     "exit_time": exit_time,
+                     "side": str(row["side"]),
+                     "entry_price": float(row["entry_price"]),
+                     "exit_price": float(row["exit_price"]),
+                     "return_pct": float(row["return"]), # Map 'return' -> 'return_pct'
+                     "holding_mins": float(row["holding_mins"]),
+                     "entry_zscore": float(row.get("entry_zscore", 0.0)),
+                     "exit_zscore": float(row.get("exit_zscore", 0.0)),
+                     "exit_reason": str(row.get("exit_reason", "")),
+                 })
+            
+            stmt = insert(StrategyTrade).values(trade_records)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["run_id", "dataset", "entry_time"],
+                set_={
+                    "exit_time": stmt.excluded.exit_time,
+                    "exit_price": stmt.excluded.exit_price,
+                    "return_pct": stmt.excluded.return_pct,
+                    "exit_reason": stmt.excluded.exit_reason
+                }
             )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO strategy_metrics (
-                run_id, strategy, study, dataset, symbol, timeframe,
-                annualized_return, total_return, sharpe, max_drawdown,
-                win_rate, trades, period_start, period_end, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_identifier,
-                strategy,
-                study,
-                dataset,
-                symbol,
-                timeframe,
-                float(metrics.get("annualized_return", 0.0)),
-                float(metrics.get("total_return", 0.0)),
-                float(metrics.get("sharpe", 0.0)),
-                float(metrics.get("max_drawdown", 0.0)),
-                float(metrics.get("win_rate", 0.0)),
-                int(metrics.get("trades", 0)),
-                metrics.get("period_start"),
-                metrics.get("period_end"),
-                datetime.now(timezone.utc).isoformat(),
-            ),
+            session.execute(stmt)
+
+        # 2. Upsert Metrics
+        metric_record = {
+            "run_id": run_identifier,
+            "strategy": strategy,
+            "study": study,
+            "dataset": dataset,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "annualized_return": float(metrics.get("annualized_return", 0.0)),
+            "total_return": float(metrics.get("total_return", 0.0)),
+            "sharpe": float(metrics.get("sharpe", 0.0)),
+            "max_drawdown": float(metrics.get("max_drawdown", 0.0)),
+            "win_rate": float(metrics.get("win_rate", 0.0)),
+            "trades_count": int(metrics.get("trades", 0)),
+            "period_start": pd.to_datetime(metrics.get("period_start"), utc=True) if metrics.get("period_start") else None,
+            "period_end": pd.to_datetime(metrics.get("period_end"), utc=True) if metrics.get("period_end") else None,
+            "created_at": created_at
+        }
+        
+        stmt_m = insert(StrategyMetric).values([metric_record])
+        stmt_m = stmt_m.on_conflict_do_update(
+            index_elements=["run_id", "dataset"],
+            set_={
+                "total_return": stmt_m.excluded.total_return,
+                "sharpe": stmt_m.excluded.sharpe,
+                "trades_count": stmt_m.excluded.trades_count,
+                "created_at": stmt_m.excluded.created_at
+            }
         )
-    conn.close()
+        session.execute(stmt_m)
+
     LOGGER.info(
-        "Stored %s trades for %s | %s (%s) run=%s",
-        len(trades),
-        strategy,
-        study,
-        dataset,
-        run_identifier,
+        "Stored %s trades for %s | %s (%s) run=%s (Postgres)",
+        len(trades), strategy, study, dataset, run_identifier
     )
     return run_identifier
 
@@ -271,21 +190,17 @@ def prune_strategy_trades(
     timeframe: str,
     keep_run_id: str,
 ) -> int:
-    """刪除舊 run 的交易紀錄，只保留指定 run_id。"""
-    conn = _ensure_connection(db_path)
-    with conn:
-        cursor = conn.execute(
-            """
-            DELETE FROM strategy_trades
-            WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
-            """,
-            (strategy, study, symbol, timeframe, keep_run_id),
+    """Delete old run trades, keeping specific run_id."""
+    with get_session() as session:
+        stmt = delete(StrategyTrade).where(
+            StrategyTrade.strategy == strategy,
+            StrategyTrade.study == study,
+            StrategyTrade.symbol == symbol,
+            StrategyTrade.timeframe == timeframe,
+            StrategyTrade.run_id != keep_run_id
         )
-    conn.close()
-    removed = cursor.rowcount or 0
-    if removed:
-        LOGGER.info("Pruned %s trades for %s | %s | %s", removed, strategy, study, timeframe)
-    return removed
+        result = session.execute(stmt)
+        return result.rowcount
 
 
 def prune_strategy_metrics(
@@ -297,22 +212,17 @@ def prune_strategy_metrics(
     timeframe: str,
     keep_run_id: str,
 ) -> int:
-    """刪除舊 run 的績效紀錄，只保留指定 run_id。"""
-    conn = _ensure_connection(db_path)
-    with conn:
-        cursor = conn.execute(
-            """
-            DELETE FROM strategy_metrics
-            WHERE strategy = ? AND study = ? AND symbol = ? AND timeframe = ? AND run_id <> ?
-            """,
-            (strategy, study, symbol, timeframe, keep_run_id),
+    """Delete old run metrics, keeping specific run_id."""
+    with get_session() as session:
+        stmt = delete(StrategyMetric).where(
+            StrategyMetric.strategy == strategy,
+            StrategyMetric.study == study,
+            StrategyMetric.symbol == symbol,
+            StrategyMetric.timeframe == timeframe,
+            StrategyMetric.run_id != keep_run_id
         )
-    conn.close()
-    removed = cursor.rowcount or 0
-    if removed:
-        LOGGER.info("Pruned %s metrics rows for %s | %s | %s", removed, strategy, study, timeframe)
-    return removed
-
+        result = session.execute(stmt)
+        return result.rowcount
 
 __all__ = [
     "save_trades",
