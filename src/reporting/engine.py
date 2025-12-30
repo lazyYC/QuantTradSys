@@ -11,7 +11,7 @@ from typing import Mapping, List, Optional, Tuple, Any
 
 import pandas as pd
 
-from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
+# from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB # Removed
 from persistence.param_store import load_strategy_params
 from strategies.base import BaseStrategy
 from strategies.loader import load_strategy_class

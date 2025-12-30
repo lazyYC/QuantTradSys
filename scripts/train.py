@@ -10,7 +10,7 @@ from pathlib import Path
 
 # 1. Setup (Path, Logging, Config)
 
-from config.paths import DEFAULT_STATE_DB
+# from config.paths import DEFAULT_STATE_DB # Removed
 from training.engine import TrainingEngine
 
 logging.basicConfig(
@@ -53,8 +53,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--test-days", type=int, default=30, help="Days to use for validation/testing")
     parser.add_argument("--use-gpu", action="store_true")
     
-    # Storage Paths (Simplified)
-    parser.add_argument("--store-path", type=Path, default=DEFAULT_STATE_DB, help="Path to SQLite DB for params and trades")
+    # Storage Paths
+    # parser.add_argument("--store-path", type=Path, default=DEFAULT_STATE_DB, help="Path to SQLite DB for params and trades") # Deprecated
     parser.add_argument("--model-dir", type=Path, default=None, help="Directory to save models (default: storage/models/{strategy})")
     parser.add_argument("--dry-run", action="store_true", help="Run without saving to main DB (uses temp DB)")
     

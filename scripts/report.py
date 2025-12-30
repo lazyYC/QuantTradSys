@@ -16,7 +16,7 @@ from pathlib import Path
 # if str(SRC_DIR) not in sys.path:
 #     sys.path.insert(0, str(SRC_DIR))
 
-from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB
+# from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB # Removed
 from utils.logging import setup_logging
 from reporting.engine import ReportEngine
 
@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Strategy Report")
     parser.add_argument("--strategy", required=True)
     parser.add_argument("--study", help="Study name (experiment ID)")
-    parser.add_argument("--store-path", type=Path, default=DEFAULT_STATE_DB)
-    parser.add_argument("--ohlcv-db", default=DEFAULT_MARKET_DB)
+    parser.add_argument("--store-path", type=Path, default=Path("postgres"))
+    parser.add_argument("--ohlcv-db", type=Path, default=Path("postgres"))
     parser.add_argument("--output", default="reports/report.html")
     parser.add_argument("--title", help="Report Title")
     parser.add_argument("--start", help="Start Date (ISO)")

@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 import pandas as pd
 import optuna
 
-from config.paths import DEFAULT_STATE_DB
 from config.env import load_env
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
+from persistence.market_store import MarketDataStore
 from optimization.engine import optimize_strategy
 from strategies.base import BaseStrategy
 from strategies.loader import load_strategy_class
@@ -70,7 +70,7 @@ class TrainingEngine:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> TrainingEngine:
         # Handle Dry Run Logic for paths
-        store_path =  args.store_path
+        store_path = Path("postgres_store") # Dummy path, store uses DB connection
         model_dir = args.model_dir
         
         if args.dry_run:
@@ -133,6 +133,7 @@ class TrainingEngine:
             lookback_days=self.ctx.lookback_days,
             exchange_id=self.ctx.exchange,
             prune_history=False,
+            market_store=MarketDataStore(),
         )
         self.ctx.cleaned_df = prepare_ohlcv_frame(raw_df, self.ctx.timeframe)
         LOGGER.info(f"Loaded data shape: {self.ctx.cleaned_df.shape}")

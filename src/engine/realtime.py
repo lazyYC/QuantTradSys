@@ -11,15 +11,12 @@ from typing import Dict, Optional, Any
 
 import pandas as pd
 
-from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB, DEFAULT_LOG_DIR
+from config.paths import DEFAULT_LOG_DIR
 from config.env import load_env
 
 from data_pipeline.binance_ws import BinanceKlineSubscriber
-from data_pipeline.ccxt_fetcher import (
-    ensure_database,
-    fetch_yearly_ohlcv,
-    upsert_ohlcv_rows,
-)
+from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
+from persistence.market_store import MarketDataStore
 from notifier.dispatcher import dispatch_signal
 from persistence.param_store import load_strategy_params, StrategyRecord
 from persistence.runtime_store import load_runtime_state, save_runtime_state
@@ -152,14 +149,15 @@ class RealtimeEngine:
             exchange_id=exchange,
             exchange_config=exchange_config,
             prune_history=False,
-            db_path=market_db_path,
+            # db_path=market_db_path, # Removed
         )
         prepared = prepare_ohlcv_frame(raw_df, timeframe)
         if prepared.empty:
             raise RuntimeError(f"No historical OHLCV data for {self.symbol} {timeframe}")
 
         self.data_lock = threading.Lock()
-        self.db_conn = ensure_database(market_db_path)
+        self.market_store = MarketDataStore()
+        # self.db_conn = ensure_database(market_db_path) # Removed
 
         self.price_df = prepared.reset_index(drop=True)
 
@@ -259,7 +257,7 @@ class RealtimeEngine:
         finally:
             if self.subscriber:
                 self.subscriber.stop()
-            self.db_conn.close()
+            # self.db_conn.close() # No explicit close needed for managed session
             LOGGER.info("Realtime Engine stopped")
 
     def _handle_closed_kline(self, kline: dict) -> None:
@@ -285,11 +283,10 @@ class RealtimeEngine:
 
         with self.data_lock:
             self.price_df = _safe_concat(self.price_df, row_df, self.max_rows)
-            upsert_ohlcv_rows(
-                self.db_conn,
-                self.symbol,
-                self.timeframe,
-                [(ts_open, iso_ts, open_, high, low, close, volume)],
+            self.market_store.upsert_candles(
+                data=[(ts_open, iso_ts, open_, high, low, close, volume)],
+                symbol=self.symbol,
+                timeframe=self.timeframe
             )
         LOGGER.info("Closed Kline: %s close=%s volume=%s", ts.isoformat(), close, volume)
         self._evaluate("websocket")

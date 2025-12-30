@@ -24,7 +24,7 @@ import sys
 # Path hack removed - dependent on pip install -e .
 
 
-from config.paths import DEFAULT_STATE_DB, DEFAULT_MARKET_DB, DEFAULT_LOG_DIR
+from config.paths import DEFAULT_LOG_DIR
 from config.env import load_env
 from utils.logging import setup_logging
 
@@ -51,9 +51,9 @@ def main() -> None:
     parser.add_argument(
         "--lookback-days", type=int, default=30, help="History days to load for initialization"
     )
-    parser.add_argument("--params-db", type=Path, default=DEFAULT_STATE_DB)
-    parser.add_argument("--state-db", type=Path, default=DEFAULT_STATE_DB)
-    parser.add_argument("--ohlcv-db", type=Path, default=DEFAULT_MARKET_DB)
+    parser.add_argument("--params-db", type=Path, default=Path("postgres_params"))
+    parser.add_argument("--state-db", type=Path, default=Path("postgres_state"))
+    parser.add_argument("--ohlcv-db", type=Path, default=Path("postgres_market"))
     parser.add_argument("--exchange", type=str, default="binanceusdm")
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_DIR / "scheduler.log")
     args = parser.parse_args()
