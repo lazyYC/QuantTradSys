@@ -5,6 +5,7 @@ import argparse
 import logging
 import os
 import sys
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, List, Optional, Tuple, Any
@@ -94,7 +95,9 @@ class ReportEngine:
         self._run_backtest()
         
         # 4. Generate Report (Equity, Figures, HTML)
-        self._generate_report()
+        # 4. Generate Report (Equity, Figures, HTML)
+        self._generate_tradingview_report()
+        # self._generate_report() # Old Plotly Logic
 
     def _prepare_metadata(self) -> None:
         """Load strategy params and resolve symbol/timeframe."""
@@ -160,6 +163,140 @@ class ReportEngine:
             self.ctx.trades_df["dataset"] = "backtest"
             
         self.ctx.metrics_df = pd.DataFrame([result.metrics])
+
+    # ----------------------------------------------------------------
+    # TradingView Logic
+    # ----------------------------------------------------------------
+
+    def _generate_tradingview_report(self) -> None:
+        """Generate HTML report using TradingView Lightweight Charts."""
+        
+        # 1. Build Equity Curve
+        self.ctx.equity_df = build_equity_from_trades(self.ctx.trades_df, self.ctx.candles)
+        self.ctx.equity_df = filter_by_time(self.ctx.equity_df, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
+        
+        # 2. Prepare Data for JSON
+        
+        # Candles
+        # LW Charts expects seconds for timestamp
+        candles = self.ctx.candles.copy()
+        if "timestamp" in candles.columns:
+            candles["time"] = candles["timestamp"].astype('int64') // 10**9
+        
+        candle_data = []
+        volume_data = []
+        for _, row in candles.iterrows():
+            c = {
+                "time": int(row["time"]),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            }
+            candle_data.append(c)
+            
+            # Volume color based on close > open
+            color = "#26a69a" if row["close"] >= row["open"] else "#ef5350"
+            v = {
+                "time": int(row["time"]),
+                "value": float(row["volume"]),
+                "color": color
+            }
+            volume_data.append(v)
+            
+        # Equity
+        equity_data = []
+        if not self.ctx.equity_df.empty:
+            eq = self.ctx.equity_df.copy()
+            eq["time"] = eq["timestamp"].astype('int64') // 10**9
+            for _, row in eq.iterrows():
+                equity_data.append({
+                    "time": int(row["time"]),
+                    "value": float(row["equity"])
+                })
+                
+        # Markers (Trades)
+        markers = []
+        if not self.ctx.trades_df.empty:
+            for _, row in self.ctx.trades_df.iterrows():
+                # Entry
+                entry_ts = pd.to_datetime(row["entry_time"]).timestamp()
+                markers.append({
+                    "time": int(entry_ts),
+                    "position": "belowBar" if row["side"] == "LONG" else "aboveBar",
+                    "color": "#2196F3" if row["side"] == "LONG" else "#E91E63", # Blue for Long, Pink for Short
+                    "shape": "arrowUp" if row["side"] == "LONG" else "arrowDown",
+                    "text": str(row['entry_price'])
+                })
+                
+                # Exit
+                exit_ts = pd.to_datetime(row["exit_time"]).timestamp()
+                markers.append({
+                    "time": int(exit_ts),
+                    "position": "aboveBar" if row["side"] == "LONG" else "belowBar", 
+                    "color": "#FF9800", # Orange for Exit
+                    "shape": "circle", 
+                    "text": str(row['exit_price'])
+                })
+        
+        # Sort markers by time just in case
+        markers.sort(key=lambda x: x["time"])
+        
+        # 4. Prepare Tables (Metrics & Distribution)
+        # We render them as simple HTML tables to match the dark theme via CSS
+        metrics_html = ""
+        if not self.ctx.metrics_df.empty:
+            # Transpose for better view if it's a single row
+            m_df = self.ctx.metrics_df.copy()
+            if len(m_df) == 1:
+                m_df = m_df.T.reset_index()
+                m_df.columns = ["Metric", "Value"]
+            metrics_html = m_df.to_html(classes="data-table", index=False, border=0, float_format=lambda x: f"{x:.4f}")
+            
+        dist_html = ""
+        if not self.ctx.trades_df.empty:
+            # Simple aggregations
+            # Let's create a distribution summary similar to the old table
+            t_df = self.ctx.trades_df
+            dist_data = {
+                "Total Trades": len(t_df),
+                "Longs": len(t_df[t_df["side"] == "LONG"]),
+                "Shorts": len(t_df[t_df["side"] == "SHORT"]),
+                "Win Rate": f"{(len(t_df[t_df['return'] > 0]) / len(t_df) * 100):.1f}%" if len(t_df) > 0 else "0%",
+                "Avg Return": f"{t_df['return'].mean():.4f}",
+            }
+            dist_df = pd.DataFrame([dist_data])
+             # Transpose for layout
+            dist_df = dist_df.T.reset_index()
+            dist_df.columns = ["Stat", "Value"]
+            dist_html = dist_df.to_html(classes="data-table", index=False, border=0)
+        
+        # 5. Read Template and Inject
+        template_path = Path(__file__).parent / "templates" / "tradingview_report.html"
+        if not template_path.exists():
+            LOGGER.error(f"Template not found at {template_path}")
+            return
+            
+        html_content = template_path.read_text(encoding="utf-8")
+        
+        # Replacements
+        title = self.ctx.title or f"{self.ctx.strategy_name} - {self.ctx.study_name}"
+        html_content = html_content.replace("/*TITLE*/", title)
+        html_content = html_content.replace("/*STRATEGY*/", self.ctx.strategy_name)
+        html_content = html_content.replace("/*STUDY*/", self.ctx.study_name)
+        
+        html_content = html_content.replace("/*INJECT_CANDLES*/", json.dumps(candle_data))
+        html_content = html_content.replace("/*INJECT_EQUITY*/", json.dumps(equity_data))
+        html_content = html_content.replace("/*INJECT_VOLUME*/", json.dumps(volume_data))
+        html_content = html_content.replace("/*INJECT_MARKERS*/", json.dumps(markers))
+        
+        html_content = html_content.replace("/*INJECT_METRICS*/", metrics_html)
+        html_content = html_content.replace("/*INJECT_DISTRIBUTION*/", dist_html)
+        
+        # 6. Write Output
+        self.ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.ctx.output_path.write_text(html_content, encoding="utf-8")
+        LOGGER.info(f"Report saved to {self.ctx.output_path}")
 
     def _generate_report(self) -> None:
         """Calculate Equity, Build Figures, Write HTML."""

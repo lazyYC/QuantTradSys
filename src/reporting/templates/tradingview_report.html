@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>/*TITLE*/</title>
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #131722;
+            /* TradingView Dark Background */
+            color: #d1d5db;
+        }
+
+        /* Layout */
+        .header {
+            padding: 12px 20px;
+            background-color: #1e222d;
+            border-bottom: 1px solid #2a2e39;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+            color: #d1d4dc;
+        }
+
+        .meta {
+            font-size: 13px;
+            color: #787b86;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .full-width-container {
+            margin: 0;
+            padding: 20px 20px 0 20px;
+            /* Top/Side padding, no bottom to hug container */
+        }
+
+        /* Chart Controls */
+        .controls {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 15px;
+            font-size: 13px;
+        }
+
+        .control-item {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .control-item input {
+            margin-right: 6px;
+        }
+
+        #chart-container {
+            width: 100%;
+            height: 600px;
+            border: 1px solid #2a2e39;
+            border-radius: 4px;
+            position: relative;
+            background: #1e222d;
+            margin-bottom: 30px;
+            overflow: hidden;
+        }
+
+        #error-display {
+            color: #ef5350;
+            padding: 20px;
+            display: none;
+            background: #2a1010;
+            border: 1px solid #501010;
+            margin: 20px;
+        }
+
+        /* Legend */
+        .legend {
+            position: absolute;
+            left: 12px;
+            top: 12px;
+            z-index: 10;
+            font-size: 14px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            line-height: 18px;
+            color: #d1d4dc;
+            pointer-events: none;
+            background: rgba(30, 34, 45, 0.7);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        /* Tables */
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #d1d4dc;
+            margin-bottom: 15px;
+            border-left: 4px solid #2962FF;
+            padding-left: 10px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 30px;
+            background: #1e222d;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .data-table th,
+        .data-table td {
+            text-align: left;
+            padding: 10px 15px;
+            border-bottom: 1px solid #2a2e39;
+        }
+
+        .data-table th {
+            background-color: #2a2e39;
+            font-weight: 500;
+            color: #d1d4dc;
+        }
+
+        .data-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .data-table tr:hover {
+            background-color: #2a2e39;
+        }
+
+        /* Utility */
+        .text-green {
+            color: #26a69a;
+        }
+
+        .text-red {
+            color: #ef5350;
+        }
+
+        .text-right {
+            text-align: right !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>/*TITLE*/</h1>
+        <div class="meta">/*STRATEGY*/ | /*STUDY*/</div>
+    </div>
+
+    <div id="error-display"></div>
+
+    <div class="full-width-container">
+        <!-- Controls -->
+        <div class="controls">
+            <label class="control-item">
+                <input type="checkbox" id="check-markers" checked>
+                Show Trades
+            </label>
+            <label class="control-item">
+                <input type="checkbox" id="check-labels" checked>
+                Show Price Labels
+            </label>
+        </div>
+
+        <!-- Chart -->
+        <div id="chart-container">
+            <div class="legend" id="legend"></div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Metrics -->
+        <div class="section-title">Performance Metrics</div>
+        /*INJECT_METRICS*/
+
+        <!-- Distribution -->
+        <div class="section-title">Trade Distribution</div>
+        /*INJECT_DISTRIBUTION*/
+    </div>
+
+    <script>
+        try {
+            // Data Injection
+            const candleData = /*INJECT_CANDLES*/;
+            const equityData = /*INJECT_EQUITY*/;
+            const allMarkers = /*INJECT_MARKERS*/; // Contains full data
+            const volumeData = /*INJECT_VOLUME*/;
+
+            // Chart Properties
+            const chartOptions = {
+                layout: {
+                    textColor: '#d1d4dc',
+                    background: { type: 'solid', color: '#1e222d' },
+                },
+                grid: {
+                    vertLines: { color: '#2a2e39' },
+                    horzLines: { color: '#2a2e39' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#2a2e39',
+                    visible: true,
+                    scaleMargins: { top: 0.1, bottom: 0.2 },
+                },
+                leftPriceScale: {
+                    visible: true,
+                    borderColor: '#2a2e39',
+                    scaleMargins: { top: 0.1, bottom: 0.2 },
+                },
+                timeScale: {
+                    borderColor: '#2a2e39',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            };
+
+            const container = document.getElementById('chart-container');
+            const chart = LightweightCharts.createChart(container, chartOptions);
+
+            // 1. Candlestick Series
+            const candlestickSeries = chart.addCandlestickSeries({
+                upColor: '#089981',
+                downColor: '#f23645',
+                borderVisible: false,
+                wickUpColor: '#089981',
+                wickDownColor: '#f23645',
+                priceScaleId: 'right',
+            });
+            candlestickSeries.setData(candleData);
+
+            // 2. Volume Series
+            const volumeSeries = chart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: { type: 'volume' },
+                priceScaleId: 'right',
+            });
+            volumeSeries.priceScale().applyOptions({
+                scaleMargins: { top: 0.7, bottom: 0 },
+            });
+            volumeSeries.setData(volumeData);
+
+
+            // 3. Equity Series
+            const equitySeries = chart.addLineSeries({
+                color: '#2962FF',
+                lineWidth: 2,
+                priceScaleId: 'left',
+                title: 'Equity',
+                crosshairMarkerVisible: true,
+            });
+            equitySeries.setData(equityData);
+
+            // ------------------------------------------
+            // Marker Logic
+            // ------------------------------------------
+            const checkMarkers = document.getElementById('check-markers');
+            const checkLabels = document.getElementById('check-labels');
+
+            function updateMarkers() {
+                if (!checkMarkers.checked) {
+                    candlestickSeries.setMarkers([]);
+                    return;
+                }
+
+                const showText = checkLabels.checked;
+                const currentMarkers = allMarkers.map(m => ({
+                    ...m,
+                    text: showText ? m.text : undefined // Remove text if unchecked
+                }));
+                candlestickSeries.setMarkers(currentMarkers);
+            }
+
+            checkMarkers.addEventListener('change', updateMarkers);
+            checkLabels.addEventListener('change', updateMarkers);
+
+            // Initial Load
+            updateMarkers();
+
+            // ------------------------------------------
+            // Legend Logic
+            // ------------------------------------------
+            const legend = document.getElementById('legend');
+            const formatPrice = (price) => price.toFixed(2);
+            const formatVol = (vol) => (vol >= 1e6) ? (vol / 1e6).toFixed(2) + 'M' : (vol / 1e3).toFixed(2) + 'K';
+
+            chart.subscribeCrosshairMove((param) => {
+                if (param.time) {
+                    const candle = param.seriesData.get(candlestickSeries);
+                    const equity = param.seriesData.get(equitySeries);
+                    const volume = param.seriesData.get(volumeSeries);
+
+                    let components = [];
+                    if (candle) {
+                        const color = candle.close >= candle.open ? '#089981' : '#f23645';
+                        components.push(`<span style="color:${color}">O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)}</span>`);
+                    }
+                    if (equity) {
+                        components.push(`<span style="color:#2962FF">Eq:${formatPrice(equity.value)}</span>`);
+                    }
+                    if (volume) {
+                        components.push(`Vol:${formatVol(volume.value)}`);
+                    }
+
+                    legend.innerHTML = components.join(' &nbsp; | &nbsp; ');
+                } else {
+                    // Keep last visible? Or clear? simple clear for now
+                    // legend.innerHTML = ''; 
+                }
+            });
+
+            chart.timeScale().fitContent();
+
+            window.addEventListener('resize', () => {
+                chart.resize(container.clientWidth, container.clientHeight);
+            });
+
+        } catch (e) {
+            document.getElementById('error-display').style.display = 'block';
+            document.getElementById('error-display').textContent = 'Chart Error: ' + e.message + '\n' + e.stack;
+        }
+    </script>
+
+</body>
+
+</html>
