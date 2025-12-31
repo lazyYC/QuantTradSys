@@ -73,7 +73,6 @@ class ReportEngine:
         ctx = ReportContext(
             strategy_name=args.strategy,
             study_name=args.study if args.study else "default_study_name",
-
             output_path=Path(args.output),
             title=args.title,
             start_ts=start_ts,

@@ -39,19 +39,10 @@ LOGGER = logging.getLogger(__name__)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Realtime strategy engine (websocket driven)"
-    )
-    parser.add_argument(
-        "--strategy", type=str, required=True, help="Strategy algorithm name (e.g. star_xgb)"
-    )
-    parser.add_argument(
-        "--study", type=str, required=True, help="Study name (experiment ID)"
-    )
-    parser.add_argument(
-        "--lookback-days", type=int, default=30, help="History days to load for initialization"
-    )
-
+    parser = argparse.ArgumentParser(description="Realtime strategy engine (websocket driven)")
+    parser.add_argument("--strategy", type=str, required=True, help="Strategy algorithm name (e.g. star_xgb)")
+    parser.add_argument("--study", type=str, required=True, help="Study name (experiment ID)")
+    parser.add_argument("--lookback-days", type=int, default=30, help="History days to load for initialization")
     parser.add_argument("--exchange", type=str, default="binanceusdm")
     parser.add_argument("--log-path", type=Path, default=DEFAULT_LOG_DIR / "scheduler.log")
     args = parser.parse_args()
@@ -59,19 +50,12 @@ def main() -> None:
     setup_logging(log_path=args.log_path)
 
     # 1. Load Strategy Params to get Symbol/Timeframe
-    record = load_strategy_params(
-        strategy=args.strategy,
-        study=args.study,
-        # symbol/timeframe inferred
-    )
-    
+    record = load_strategy_params(strategy=args.strategy, study=args.study)
     if record is None:
         LOGGER.error(f"Parameters not found for strategy={args.strategy} study={args.study}")
         sys.exit(1)
-        
     symbol = record.symbol
     timeframe = record.timeframe
-    
     LOGGER.info(f"Loaded configuration for {args.strategy}/{args.study}: {symbol} {timeframe}")
 
     # 2. Acquire PID Lock
@@ -91,7 +75,6 @@ def main() -> None:
             strategy=args.strategy,
             study=args.study,
             lookback_days=args.lookback_days,
-
             exchange=args.exchange,
             strategy_record=record,
         )

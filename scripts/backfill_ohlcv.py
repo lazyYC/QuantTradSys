@@ -4,12 +4,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 1. Setup (Path, Logging, Config)
-# 1. Setup (Path, Logging, Config)
-# Ensure src is in path for standalone execution
-# Path hack removed - dependent on pip install -e .
-
-# from config.paths import DEFAULT_MARKET_DB # Removed
 from utils.logging import setup_logging
 
 from persistence.market_store import MarketDataStore
@@ -29,7 +23,6 @@ def main() -> None:
     setup_logging()
     LOGGER.info("Fetching %s %s for %s days", args.symbol, args.timeframe, args.lookback_days)
     
-    # Use db_path to let the fetcher handle storage, gap filling, and incremental updates
     store = MarketDataStore()
     
     fetch_yearly_ohlcv(
@@ -38,7 +31,6 @@ def main() -> None:
         exchange_id=args.exchange,
         lookback_days=args.lookback_days,
         market_store=store,
-        prune_history=False,
     )
 
 if __name__ == "__main__":

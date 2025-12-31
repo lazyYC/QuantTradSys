@@ -27,7 +27,6 @@ def fetch_yearly_ohlcv(
     output_path: Optional[Path] = None,
     lookback_days: int = 365,
     market_store: Optional[MarketDataStore] = None,
-    prune_history: bool = False,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV data for the specified lookback period.
@@ -50,11 +49,14 @@ def fetch_yearly_ohlcv(
     exchange_symbol = to_exchange_symbol(symbol, exchange_id) # e.g. BTC/USDT:USDT
     exchange = create_exchange(exchange_id, exchange_config)
     utc_now = datetime.now(timezone.utc)
-    end_timestamp = int(utc_now.timestamp() * 1000)
-    lookback = timedelta(days=lookback_days)
-    window_start_ms = calculate_since(utc_now, lookback)
+    now_ms = int(utc_now.timestamp() * 1000)
+    
+    # Calculate window
+    # calculate_since returns ms timestamp for (now - delta)
+    window_start_ms = calculate_since(utc_now, timedelta(days=lookback_days))
+    
     timeframe_ms = timeframe_to_milliseconds(timeframe)
-    ongoing_open_ms = (end_timestamp // timeframe_ms) * timeframe_ms
+    ongoing_open_ms = (now_ms // timeframe_ms) * timeframe_ms
 
     since_ms = window_start_ms
 
@@ -63,15 +65,6 @@ def fetch_yearly_ohlcv(
         last_ts = market_store.get_latest_timestamp(canonical_symbol, timeframe)
         if last_ts is not None:
              LOGGER.debug("Last stored timestamp: %s", last_ts)
-             # Remove ongoing candle from store logic? 
-             # Postgres Upsert handles it, but maybe we want to re-fetch the last unfinished candle.
-             # Let's delete the ongoing candle to be safe or just overwrite. Store.upsert handles overwrite.
-             # But if we want to re-fetch the *last closed* ?
-             # Usually we fetch from last_ts + timeframe.
-             # If last_ts is the "last recorded info", next fetch is last_ts + timeframe.
-             
-             # Logic from old fetcher:
-             # Deleted where ts >= ongoing_open_ms (current open candle)
              market_store.delete_recent(canonical_symbol, timeframe, ongoing_open_ms)
              
              # Re-check last after delete?
@@ -83,13 +76,11 @@ def fetch_yearly_ohlcv(
 
     # 2. Fetch New Data
     new_rows = []
-    if since_ms <= end_timestamp:
+    if since_ms <= now_ms:
         new_rows = fetch_ohlcv_batches(
             exchange, exchange_symbol, timeframe, since_ms, utc_now
         )
         if new_rows:
-            # Drop ongoing candle from memory if we don't want partials? 
-            # Existing logic dropped row if < ongoing_open_ms
             new_rows = [row for row in new_rows if int(row[0]) < ongoing_open_ms]
     else:
         LOGGER.info("No new candles required for %s %s", canonical_symbol, timeframe)
@@ -99,14 +90,7 @@ def fetch_yearly_ohlcv(
         inserted = market_store.upsert_candles(new_rows, canonical_symbol, timeframe)
         LOGGER.info("Inserted %s rows into Store", inserted)
 
-    # 4. Pruning
-    if market_store and prune_history:
-        # Not implemented in Store yet exposed as 'delete_older_than'?
-        # Let's implement pruning if strict requirement.
-        # But Postgres storage is cheap, maybe skip for now unless requested.
-        pass
-
-    # 5. Load Window & Backfill
+    # 4. Load Window & Backfill
     if market_store:
         # Load from store
         start_dt = datetime.fromtimestamp(window_start_ms / 1000, tz=timezone.utc)
@@ -137,9 +121,6 @@ def fetch_yearly_ohlcv(
         save_dataframe(df, output_path)
 
     return df
-
-
-
 
 
 def _backfill_missing_candles(
@@ -188,7 +169,6 @@ def _backfill_missing_candles(
         inserted = market_store.upsert_candles(rows, canonical_symbol, timeframe)
         total_inserted += inserted
     return total_inserted
-
 
 
 def _find_missing_windows(df: pd.DataFrame, timeframe_ms: int) -> List[tuple[int, int]]:

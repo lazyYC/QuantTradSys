@@ -1,21 +1,10 @@
 import argparse
-from pathlib import Path
-from datetime import datetime
-import sys
-
-# 1. Setup Path
-CURRENT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CURRENT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 from persistence.market_store import MarketDataStore
 from utils.logging import setup_logging
 from utils.symbols import canonicalize_symbol
 from utils.formatting import format_ts
 
-# Setup Logging
 setup_logging()
 
 MILLIS_PER_DAY = 86_400_000
