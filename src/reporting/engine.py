@@ -15,7 +15,7 @@ import pandas as pd
 from persistence.param_store import load_strategy_params
 from strategies.base import BaseStrategy
 from strategies.loader import load_strategy_class
-from data_pipeline.reader import read_ohlcv
+from persistence.market_store import MarketDataStore
 from utils.data_utils import filter_by_time
 from utils.trading import build_equity_from_trades
 from reporting.tables import (
@@ -63,6 +63,7 @@ class ReportEngine:
     def __init__(self, context: ReportContext):
         self.ctx = context
         self.strategy_instance: Optional[BaseStrategy] = None
+        self.market_store = MarketDataStore()
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> ReportEngine:
@@ -125,10 +126,9 @@ class ReportEngine:
     def _prepare_data(self) -> None:
         """Load OHLCV data."""
         # Load Candles
-        self.ctx.candles = read_ohlcv(
-            self.ctx.ohlcv_db_path,
-            self.ctx.symbol,
-            self.ctx.timeframe,
+        self.ctx.candles = self.market_store.load_candles(
+            symbol=self.ctx.symbol,
+            timeframe=self.ctx.timeframe,
             start_ts=self.ctx.start_ts,
             end_ts=self.ctx.end_ts,
         )
