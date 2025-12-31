@@ -18,7 +18,6 @@ LOGGER = logging.getLogger(__name__)
 
 
 def load_trades(
-    db_path: Path, # Deprecated but kept for signature compatibility (unused)
     strategy: str,
     study: Optional[str] = None,
     dataset: Optional[str] = None,
@@ -57,7 +56,6 @@ def load_trades(
 
 
 def load_metrics(
-    db_path: Path,
     strategy: str,
     study: Optional[str] = None,
     dataset: Optional[str] = None,
@@ -88,7 +86,6 @@ def load_metrics(
 
 
 def save_trades(
-    db_path: Path,
     *,
     strategy: str,
     study: str,
@@ -107,6 +104,7 @@ def save_trades(
         # 1. Upsert Trades
         if not trades.empty:
             trade_records = []
+            LOGGER.info(f"Saving {len(trades)} trades for {strategy} | {study} ({dataset})...")
             for _, row in trades.iterrows():
                 # Handle potentially missing or differently named cols from backtest
                  entry_time = pd.to_datetime(row["entry_time"], utc=True)
@@ -182,7 +180,6 @@ def save_trades(
 
 
 def prune_strategy_trades(
-    db_path: Path,
     *,
     strategy: str,
     study: str,
@@ -204,7 +201,6 @@ def prune_strategy_trades(
 
 
 def prune_strategy_metrics(
-    db_path: Path,
     *,
     strategy: str,
     study: str,

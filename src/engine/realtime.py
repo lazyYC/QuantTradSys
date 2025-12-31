@@ -52,9 +52,7 @@ class RealtimeEngine:
         strategy: str,
         study: str,
         lookback_days: int,
-        params_store_path: Path,
-        state_store_path: Path,
-        market_db_path: Path,
+
         exchange: str,
         exchange_config: Optional[Dict] = None,
         strategy_record: Optional[StrategyRecord] = None,
@@ -64,9 +62,7 @@ class RealtimeEngine:
         self.strategy = strategy
         self.study = study
         self.lookback_days = lookback_days
-        self.params_store_path = params_store_path
-        self.state_store_path = state_store_path
-        self.market_db_path = market_db_path
+
         self.exchange = exchange
         self.exchange_config = exchange_config
 
@@ -75,7 +71,6 @@ class RealtimeEngine:
             record = strategy_record
         else:
             record = load_strategy_params(
-                self.params_store_path, 
                 strategy=strategy, 
                 study=study, 
                 symbol=self.symbol, 
@@ -98,9 +93,7 @@ class RealtimeEngine:
         # Bind generic hooks
         self.RuntimeStateCls = getattr(runtime_mod, "StarRuntimeState", getattr(runtime_mod, "RuntimeState", None))
         if not self.RuntimeStateCls:
-             pass
-             
-        self.RuntimeStateCls = runtime_mod.StarRuntimeState
+             raise RuntimeError(f"Runtime {strategy} must define ReferenceState or RuntimeState")
         
         self.generate_signal_fn = runtime_mod.generate_realtime_signal
         
@@ -119,7 +112,6 @@ class RealtimeEngine:
         
         # Load Runtime State
         runtime_record = load_runtime_state(
-            self.state_store_path, 
             strategy=strategy, 
             study=study, 
             symbol=self.symbol, 
@@ -344,7 +336,6 @@ class RealtimeEngine:
 
         if trade_executed and new_state != self.runtime_state:
             save_runtime_state(
-                self.state_store_path,
                 strategy=self.strategy,
                 study=self.study,
                 symbol=self.symbol,

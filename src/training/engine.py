@@ -52,7 +52,7 @@ class TrainingContext:
     storage: str
     
     # Paths & Flags
-    store_path: Path
+
     model_dir: Optional[Path]
     dry_run: bool = False
     
@@ -70,17 +70,17 @@ class TrainingEngine:
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> TrainingEngine:
         # Handle Dry Run Logic for paths
-        store_path = Path("postgres_store") # Dummy path, store uses DB connection
+
         model_dir = args.model_dir
         
         if args.dry_run:
             temp_dir = Path(tempfile.gettempdir()) / "quant_dry_run"
             temp_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            store_path = temp_dir / f"dry_run_{timestamp}.db"
+            # store_path = temp_dir / f"dry_run_{timestamp}.db" # Unused
             if model_dir is None:
                 model_dir = temp_dir / f"models_{timestamp}"
-            LOGGER.warning(f"DRY RUN MODE: Using temp storage at {store_path}")
+            LOGGER.warning(f"DRY RUN MODE: DB writes effectively disabled or pointing to env DB (Logic updated)")
             LOGGER.warning(f"DRY RUN MODE: Models will be saved to {model_dir}")
         else:
             if model_dir is None:
@@ -103,7 +103,7 @@ class TrainingEngine:
             n_seeds=args.n_seeds,
             study_name=args.study_name,
             storage=args.storage,
-            store_path=store_path,
+
             model_dir=model_dir,
             dry_run=args.dry_run
         )
@@ -227,7 +227,6 @@ class TrainingEngine:
             
             # Save Params
             save_strategy_params(
-                self.ctx.store_path,
                 strategy=self.ctx.strategy_name,
                 study=self.ctx.study_name,
                 symbol=self.ctx.symbol,
@@ -244,7 +243,6 @@ class TrainingEngine:
             
             # Prune old trades
             prune_strategy_trades(
-                self.ctx.store_path,
                 strategy=self.ctx.strategy_name,
                 study=self.ctx.study_name,
                 symbol=self.ctx.symbol,
@@ -252,7 +250,6 @@ class TrainingEngine:
                 keep_run_id=run_id,
             )
             prune_strategy_metrics(
-                self.ctx.store_path,
                 strategy=self.ctx.strategy_name,
                 study=self.ctx.study_name,
                 symbol=self.ctx.symbol,
@@ -260,7 +257,7 @@ class TrainingEngine:
                 keep_run_id=run_id,
             )
             
-            LOGGER.info(f"Results saved to {self.ctx.store_path}")
+            LOGGER.info(f"Results saved to Database (PostgreSQL)")
 
         except Exception as e:
             LOGGER.exception("Failed to persist results")
@@ -295,7 +292,6 @@ class TrainingEngine:
             
             if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:
                 save_trades(
-                    self.ctx.store_path,
                     strategy=self.ctx.strategy_name,
                     study=self.ctx.study_name,
                     dataset=ds_name,

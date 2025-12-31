@@ -26,7 +26,6 @@ class StrategyRecord:
 
 
 def save_strategy_params(
-    db_path: Path, # Unused
     strategy: str,
     study: str,
     symbol: str,
@@ -82,7 +81,6 @@ def save_strategy_params(
 
 
 def load_strategy_params(
-    db_path: Path, # Unused
     strategy: str,
     study: str,
     symbol: Optional[str] = None,

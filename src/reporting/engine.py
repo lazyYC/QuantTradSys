@@ -33,8 +33,7 @@ class ReportContext:
     # Config
     strategy_name: str
     study_name: str
-    store_path: Path
-    ohlcv_db_path: Path
+
     output_path: Path
     title: Optional[str] = None
     # rerun: bool = True  # Removed, always True now implicitly
@@ -74,8 +73,7 @@ class ReportEngine:
         ctx = ReportContext(
             strategy_name=args.strategy,
             study_name=args.study if args.study else "default_study_name",
-            store_path=Path(args.store_path),
-            ohlcv_db_path=Path(args.ohlcv_db),
+
             output_path=Path(args.output),
             title=args.title,
             start_ts=start_ts,
@@ -102,7 +100,6 @@ class ReportEngine:
     def _prepare_metadata(self) -> None:
         """Load strategy params and resolve symbol/timeframe."""
         record = load_strategy_params(
-            self.ctx.store_path,
             strategy=self.ctx.strategy_name,
             study=self.ctx.study_name,
         )

@@ -335,7 +335,6 @@ def optimize_playground(
                 "feature_stats": training_result.feature_stats,
             }
             save_strategy_params(
-                params_store_path,
                 strategy=strategy_key,
                 symbol=symbol,
                 timeframe=timeframe,
@@ -347,7 +346,6 @@ def optimize_playground(
 
         if trades_store_path:
             save_trades(
-                trades_store_path,
                 strategy=strategy_key,
                 dataset="train",
                 symbol=symbol,
@@ -357,7 +355,6 @@ def optimize_playground(
                 run_id=run_id,
             )
             save_trades(
-                trades_store_path,
                 strategy=strategy_key,
                 dataset="valid",
                 symbol=symbol,
@@ -367,7 +364,6 @@ def optimize_playground(
                 run_id=run_id,
             )
             save_trades(
-                trades_store_path,
                 strategy=strategy_key,
                 dataset="test",
                 symbol=symbol,
@@ -377,14 +373,12 @@ def optimize_playground(
                 run_id=run_id,
             )
             prune_strategy_trades(
-                db_path=trades_store_path,
                 strategy=strategy_key,
                 symbol=symbol,
                 timeframe=timeframe,
                 keep_run_id=run_id,
             )
             prune_strategy_metrics(
-                db_path=trades_store_path,
                 strategy=strategy_key,
                 symbol=symbol,
                 timeframe=timeframe,

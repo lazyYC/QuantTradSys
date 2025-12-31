@@ -24,7 +24,6 @@ class RuntimeRecord:
 
 
 def save_runtime_state(
-    db_path: Path, # Kept for compatibility but unused
     *,
     strategy: str,
     study: str,
@@ -70,7 +69,6 @@ def save_runtime_state(
 
 
 def load_runtime_state(
-    db_path: Path, # Unused
     strategy: str,
     study: str,
     symbol: str,

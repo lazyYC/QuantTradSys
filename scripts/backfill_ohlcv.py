@@ -23,7 +23,6 @@ def main() -> None:
     parser.add_argument("symbol", help="symbol, e.g. BTC/USDT:USDT")
     parser.add_argument("timeframe", help="timeframe, e.g. 5m")
     parser.add_argument("lookback_days", type=int, help="days to backfill")
-    # parser.add_argument("--db", type=Path, default=DEFAULT_MARKET_DB, help="SQLite database path") # Deprecated
     parser.add_argument("--exchange", default="binanceusdm", help="Exchange id supported by ccxt")
     args = parser.parse_args()
 

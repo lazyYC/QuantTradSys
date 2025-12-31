@@ -13,7 +13,6 @@ from .client import (
     create_exchange,
     fetch_ohlcv_batches,
     build_dataframe,
-
     timeframe_to_milliseconds,
     calculate_since
 )
@@ -29,8 +28,6 @@ def fetch_yearly_ohlcv(
     lookback_days: int = 365,
     market_store: Optional[MarketDataStore] = None,
     prune_history: bool = False,
-    # Deprecated args kept for transitional compatibility or removed?
-    # db_path is removed. Callers must pass store if they want persistence.
 ) -> pd.DataFrame:
     """
     Fetch OHLCV data for the specified lookback period.
@@ -49,8 +46,8 @@ def fetch_yearly_ohlcv(
     if not logging.getLogger().handlers:
          logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-    canonical_symbol = canonicalize_symbol(symbol)
-    exchange_symbol = to_exchange_symbol(symbol, exchange_id)
+    canonical_symbol = canonicalize_symbol(symbol) # e.g. BTC/USDT:USDT -> BTC/USDT
+    exchange_symbol = to_exchange_symbol(symbol, exchange_id) # e.g. BTC/USDT:USDT
     exchange = create_exchange(exchange_id, exchange_config)
     utc_now = datetime.now(timezone.utc)
     end_timestamp = int(utc_now.timestamp() * 1000)

@@ -2,6 +2,7 @@
 
 from numbers import Integral, Real
 from typing import Any, Iterable, Mapping, Optional
+from datetime import datetime, timezone
 
 # 預設整數型的績效欄位
 METRIC_INT_FIELDS = frozenset({"trades"})
