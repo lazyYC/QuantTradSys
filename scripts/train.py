@@ -12,6 +12,7 @@ from pathlib import Path
 
 # from config.paths import DEFAULT_STATE_DB # Removed
 from training.engine import TrainingEngine
+from database.connection import get_database_url
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -49,7 +50,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--n-trials", type=int, default=10)
     parser.add_argument("--n-seeds", type=int, default=5, help="Number of seeds per trial for stability")
     parser.add_argument("--study-name", type=str, default="strategy_optimization")
-    parser.add_argument("--storage", type=str, default="sqlite:///storage/optuna_studies.db")
+    
+    try:
+        default_storage = get_database_url()
+    except Exception:
+        default_storage = "sqlite:///storage/optuna_studies.db"
+        
+    parser.add_argument("--storage", type=str, default=default_storage)
     parser.add_argument("--test-days", type=int, default=30, help="Days to use for validation/testing")
     parser.add_argument("--use-gpu", action="store_true")
     

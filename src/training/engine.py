@@ -132,7 +132,6 @@ class TrainingEngine:
             timeframe=self.ctx.timeframe,
             lookback_days=self.ctx.lookback_days,
             exchange_id=self.ctx.exchange,
-            prune_history=False,
             market_store=MarketDataStore(),
         )
         self.ctx.cleaned_df = prepare_ohlcv_frame(raw_df, self.ctx.timeframe)

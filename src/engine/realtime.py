@@ -140,8 +140,6 @@ class RealtimeEngine:
             lookback_days=lookback_days,
             exchange_id=exchange,
             exchange_config=exchange_config,
-            prune_history=False,
-            # db_path=market_db_path, # Removed
         )
         prepared = prepare_ohlcv_frame(raw_df, timeframe)
         if prepared.empty:
