@@ -201,10 +201,10 @@
     <script>
         try {
             // Data Injection
-            const candleData = /*INJECT_CANDLES*/;
-            const equityData = /*INJECT_EQUITY*/;
-            const allMarkers = /*INJECT_MARKERS*/; // Contains full data
-            const volumeData = /*INJECT_VOLUME*/;
+            const candleData = "INJECT_CANDLES";
+            const equityData = "INJECT_EQUITY";
+            const allMarkers = "INJECT_MARKERS"; // Contains full data
+            const volumeData = "INJECT_VOLUME";
 
             // Chart Properties
             const chartOptions = {
@@ -222,12 +222,12 @@
                 rightPriceScale: {
                     borderColor: '#2a2e39',
                     visible: true,
-                    scaleMargins: { top: 0.1, bottom: 0.2 },
+                    scaleMargins: { top: 0.1, bottom: 0.1 },
                 },
                 leftPriceScale: {
                     visible: true,
                     borderColor: '#2a2e39',
-                    scaleMargins: { top: 0.1, bottom: 0.2 },
+                    scaleMargins: { top: 0.1, bottom: 0.1 },
                 },
                 timeScale: {
                     borderColor: '#2a2e39',
@@ -254,10 +254,10 @@
             const volumeSeries = chart.addHistogramSeries({
                 color: '#26a69a',
                 priceFormat: { type: 'volume' },
-                priceScaleId: 'right',
+                priceScaleId: '', // Overlay
             });
             volumeSeries.priceScale().applyOptions({
-                scaleMargins: { top: 0.7, bottom: 0 },
+                scaleMargins: { top: 0.8, bottom: 0 },
             });
             volumeSeries.setData(volumeData);
 
@@ -314,9 +314,9 @@
                 isScheduled = false;
 
                 if (!param || !param.time) {
-                     // keeping last value or clear? let's clear if out of chart
-                     // legend.innerHTML = '';
-                     return;
+                    // keeping last value or clear? let's clear if out of chart
+                    // legend.innerHTML = '';
+                    return;
                 }
 
                 const candle = param.seriesData.get(candlestickSeries);
