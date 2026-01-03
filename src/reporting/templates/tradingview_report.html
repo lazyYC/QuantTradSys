@@ -305,28 +305,44 @@
             const formatPrice = (price) => price.toFixed(2);
             const formatVol = (vol) => (vol >= 1e6) ? (vol / 1e6).toFixed(2) + 'M' : (vol / 1e3).toFixed(2) + 'K';
 
+            // Throttled Crosshair Move
+            let isScheduled = false;
+            let lastParam = null;
+
+            function updateLegend() {
+                const param = lastParam;
+                isScheduled = false;
+
+                if (!param || !param.time) {
+                     // keeping last value or clear? let's clear if out of chart
+                     // legend.innerHTML = '';
+                     return;
+                }
+
+                const candle = param.seriesData.get(candlestickSeries);
+                const equity = param.seriesData.get(equitySeries);
+                const volume = param.seriesData.get(volumeSeries);
+
+                let components = [];
+                if (candle) {
+                    const color = candle.close >= candle.open ? '#089981' : '#f23645';
+                    components.push(`<span style="color:${color}">O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)}</span>`);
+                }
+                if (equity) {
+                    components.push(`<span style="color:#2962FF">Eq:${formatPrice(equity.value)}</span>`);
+                }
+                if (volume) {
+                    components.push(`Vol:${formatVol(volume.value)}`);
+                }
+
+                legend.innerHTML = components.join(' &nbsp; | &nbsp; ');
+            }
+
             chart.subscribeCrosshairMove((param) => {
-                if (param.time) {
-                    const candle = param.seriesData.get(candlestickSeries);
-                    const equity = param.seriesData.get(equitySeries);
-                    const volume = param.seriesData.get(volumeSeries);
-
-                    let components = [];
-                    if (candle) {
-                        const color = candle.close >= candle.open ? '#089981' : '#f23645';
-                        components.push(`<span style="color:${color}">O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)}</span>`);
-                    }
-                    if (equity) {
-                        components.push(`<span style="color:#2962FF">Eq:${formatPrice(equity.value)}</span>`);
-                    }
-                    if (volume) {
-                        components.push(`Vol:${formatVol(volume.value)}`);
-                    }
-
-                    legend.innerHTML = components.join(' &nbsp; | &nbsp; ');
-                } else {
-                    // Keep last visible? Or clear? simple clear for now
-                    // legend.innerHTML = ''; 
+                lastParam = param;
+                if (!isScheduled) {
+                    requestAnimationFrame(updateLegend);
+                    isScheduled = true;
                 }
             });
 
