@@ -258,6 +258,7 @@ def execute_trading(
                 ratio=_load_order_ratio(broker.name),
                 max_notional=_load_max_notional(broker.name),
                 scale=context.get("scale", 1.0),
+                leverage=float(context.get("leverage", 1.0)),
             )
             if notional <= 0:
                 LOGGER.warning("%s trading skipped: no buying power available for short", broker_label)
@@ -680,7 +681,9 @@ def _resolve_binance_notional(account: Dict[str, Any], ratio: float, leverage: f
             continue
         if amount > 0:
             LOGGER.info("Using Binance %s=%.2f leverage=%.1f ratio=%.2f for sizing", key, amount, leverage, ratio)
-            return amount * leverage * ratio
+            # Fix: User expects sizing based on Equity (Balance * Ratio), not Max Buying Power.
+            # Removed '* leverage' multiplication.
+            return amount * ratio
             
     LOGGER.info("Binance account has no USDT available for trading")
     return 0.0
