@@ -117,7 +117,7 @@ class TrainingEngine:
         self._load_data()
         
         # 2. Warm Up Strategy
-        self._initialize_strategy()
+        self._warmup_strategy()
         
         # 3. Optimize
         self._run_optimization()
@@ -140,7 +140,26 @@ class TrainingEngine:
             LOGGER.error("Data is empty! Check symbol or fetcher.")
             sys.exit(1)
 
+        # Initialize strategy to use its split logic
+        self._initialize_strategy()
+
+        # Split Data IMMEDIATELY to prevent leakage
+        train_df, valid_df, test_df = self.ctx.strategy_instance.split_data(
+            self.ctx.cleaned_df,
+            test_days=self.ctx.test_days,
+            valid_days=self.ctx.valid_days
+        )
+        # Store for use in Opt/Train
+        # Combine Train+Valid for Optimization/Training (Strategy handles internal split if needed)
+        self.ctx.dev_df = pd.concat([train_df, valid_df], ignore_index=True).sort_values("timestamp").reset_index(drop=True)
+        self.ctx.test_df = test_df
+        
+        LOGGER.info(f"Data Split | Dev: {len(self.ctx.dev_df)} rows | Test: {len(self.ctx.test_df)} rows")
+
     def _initialize_strategy(self) -> None:
+        if self.ctx.strategy_instance:
+             return # Already inited
+
         try:
             strategy_cls = load_strategy_class(self.ctx.strategy_name)
         except ValueError as e:
@@ -148,10 +167,17 @@ class TrainingEngine:
             sys.exit(1)
             
         self.ctx.strategy_instance = strategy_cls()
+        # Warmup happens after data load usually, but we need instance for split_data. 
+        # So we split init and warmup.
+    
+    def _warmup_strategy(self) -> None:
         LOGGER.info("Warming up strategy caches...")
-        self.ctx.strategy_instance.warm_up(self.ctx.cleaned_df)
+        # Warmup on Dev data only? Or all? 
+        # Use Dev data to be safe, though cache is stateless usually.
+        self.ctx.strategy_instance.warm_up(self.ctx.dev_df)
 
     def _run_optimization(self) -> None:
+        # ... config ...
         config = {
             "future_window": self.ctx.future_window,
             "future_return_threshold": self.ctx.future_return_threshold,
@@ -163,9 +189,10 @@ class TrainingEngine:
         
         LOGGER.info(f"Starting optimization for {self.ctx.strategy_name} with config: {config}")
         
+        # Use dev_df (Train+Valid) ONLY
         self.ctx.study = optimize_strategy(
             strategy=self.ctx.strategy_instance,
-            raw_data=self.ctx.cleaned_df,
+            raw_data=self.ctx.dev_df,
             config=config,
             n_trials=self.ctx.n_trials,
             n_seeds=self.ctx.n_seeds,
@@ -175,7 +202,7 @@ class TrainingEngine:
         )
         
         self.ctx.best_params = {**config, **self.ctx.study.best_params}
-        
+        # ... print ...
         print("\n" + "=" * 80)
         print(" Optimization Finished ".center(80, "="))
         print(f"Best Value: {self.ctx.study.best_value:.4f}")
@@ -189,12 +216,12 @@ class TrainingEngine:
         self.ctx.model_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Prepare data
+            # Prepare data (Use dev_df)
             dataset, metadata = self.ctx.strategy_instance.prepare_data(
-                self.ctx.cleaned_df, self.ctx.best_params
+                self.ctx.dev_df, self.ctx.best_params
             )
             
-            # Train final model
+            # Train final model (Use dev_df)
             result = self.ctx.strategy_instance.train(
                 train_data=dataset,
                 valid_data=None,
@@ -264,29 +291,49 @@ class TrainingEngine:
             traceback.print_exc()
 
     def _run_backtest_on_splits(self, run_id: str, model_path_str: str | None) -> None:
-        # Split Data
-        # Assuming valid_days is same as test_days for now structure
-        train_df, valid_df, test_df = self.ctx.strategy_instance.split_data(
-            self.ctx.cleaned_df, 
-            test_days=self.ctx.test_days, 
-            valid_days=self.ctx.valid_days
-        )
+        # Split Data (Reusing the initial split logic, essentially getting test_df)
+        # Note: Strategy split_data returns SHUFFLED train/valid usually. Backtesting on shuffled data is invalid.
+        # But test_df is time-continuous.
+        
+        # We need the Original Full DF to get warmup for Test
+        # self.ctx.dev_df + self.ctx.test_df covers the range.
+        
+        # We only really care about the TEST backtest for reporting OOS performance.
+        # Train/Valid are optimization artifacts.
         
         datasets_to_run = [
-            ("train", train_df),
-            ("valid", valid_df),
-            ("test", test_df),
+            ("test", self.ctx.test_df),
         ]
+        
+        full_sorted_df = pd.concat([self.ctx.dev_df, self.ctx.test_df]).sort_values("timestamp")
         
         for ds_name, ds_data in datasets_to_run:
             if ds_data.empty:
                 LOGGER.warning(f"Dataset {ds_name} is empty, skipping backtest for it.")
                 continue
+
+            # Prepend Warmup Data
+            start_ts = ds_data["timestamp"].min()
+            warmup_period = pd.Timedelta(days=60) # Conservative warmup
+            cutoff = start_ts - warmup_period
+            
+            # Slice from full history
+            warmup_data = full_sorted_df[
+                (full_sorted_df["timestamp"] >= cutoff) & 
+                (full_sorted_df["timestamp"] < start_ts)
+            ]
+            
+            # Combined for Backtest
+            backtest_data = pd.concat([warmup_data, ds_data]).sort_values("timestamp").reset_index(drop=True)
+                
+            LOGGER.info(f"Running backtest on {ds_name} (starts {start_ts}) with {len(warmup_data)} warmup rows.")
                 
             bt_result = self.ctx.strategy_instance.backtest(
-                raw_data=ds_data,
+                raw_data=backtest_data,
                 params=self.ctx.best_params,
-                model_path=model_path_str
+                model_path=model_path_str,
+                # Pass core_start to tell backtester where the REAL evaluation begins
+                core_start=start_ts 
             )
             
             if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:

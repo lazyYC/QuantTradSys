@@ -215,7 +215,8 @@ class PlaygroundStrategy(BaseStrategy):
         self, 
         raw_data: pd.DataFrame, 
         params: Dict[str, Any], 
-        model_path: Optional[str] = None
+        model_path: Optional[str] = None,
+        core_start: Optional[pd.Timestamp] = None,
     ) -> Any:
         from strategies.playground.backtest import backtest_star_xgb
         from strategies.playground.dataset import split_train_test, prepend_warmup_rows, DEFAULT_WARMUP_BARS
@@ -248,4 +249,5 @@ class PlaygroundStrategy(BaseStrategy):
             transaction_cost=params.get("transaction_cost", 0.001),
             stop_loss_pct=params.get("stop_loss_pct", 0.005),
             use_vectorized_metrics=True, # Consistent with optimization
+            core_start=core_start,
         )

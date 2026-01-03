@@ -123,20 +123,23 @@ class ReportEngine:
             sys.exit(1)
 
     def _prepare_data(self) -> None:
-        """Load OHLCV data."""
+        """Load OHLCV data with warmup buffering."""
         # Load Candles
+        # We need warmup data for indicators (approx 60 days to be safe for 30-day patterns/windows)
+        warmup_days = 60
+        fetch_start = self.ctx.start_ts - pd.Timedelta(days=warmup_days) if self.ctx.start_ts else None
+        
         self.ctx.candles = self.market_store.load_candles(
             symbol=self.ctx.symbol,
             timeframe=self.ctx.timeframe,
-            start_ts=self.ctx.start_ts,
+            start_ts=fetch_start,
             end_ts=self.ctx.end_ts,
         )
         if self.ctx.candles.empty:
             LOGGER.error(f"No OHLCV data found for {self.ctx.symbol} {self.ctx.timeframe}.")
             sys.exit(1)
             
-        # NOTE: We intentionally do NOT load trades/metrics. 
-        # We always rerun the backtest to ensure consistency with current logic/data.
+        LOGGER.info(f"Loaded {len(self.ctx.candles)} candles (including warmup from {fetch_start})")
 
     def _run_backtest(self) -> None:
         """Always rerun backtest."""
@@ -150,12 +153,19 @@ class ReportEngine:
             LOGGER.error(e)
             sys.exit(1)
             
-        # Run Backtest
+        # Run Backtest with core_start to trim warmup from results
         result = self.strategy_instance.backtest(
             self.ctx.candles, 
             self.ctx.params, 
-            model_path=self.ctx.model_path
+            model_path=self.ctx.model_path,
+            core_start=self.ctx.start_ts # Add this arg to BaseStrategy.backtest if needed, or pass via kwargs?
         )
+        # Note: We need to ensure PlaygroundStrategy.backtest accepts core_start. 
+        # Checking adapter.py... it does NOT accept **kwargs explicitly in signature but backtest_star_xgb does.
+        # Check adapter.py backtest signature: (self, raw_data, params, model_path).
+        # We need to update adapter.py or pass generic kwargs if supported.
+        # Let's check adapter.py first. if not, we must update it.
+        # Assuming adapter.py needs update too.
         
         # Update Context
         self.ctx.trades_df = result.trades
