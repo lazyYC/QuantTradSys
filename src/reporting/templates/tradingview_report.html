@@ -201,10 +201,42 @@
     <script>
         try {
             // Data Injection
-            const candleData = "INJECT_CANDLES";
-            const equityData = "INJECT_EQUITY";
-            const allMarkers = "INJECT_MARKERS"; // Contains full data
-            const volumeData = "INJECT_VOLUME";
+            const candleData = /*INJECT_CANDLES*/;
+            const equityData = /*INJECT_EQUITY*/;
+            const allMarkers = /*INJECT_MARKERS*/; // Contains full data
+            const volumeData = /*INJECT_VOLUME*/;
+
+            // ------------------------------------------
+            // Re-basing Logic (Normalize Equity to Price)
+            // ------------------------------------------
+            let scaleFactor = 1.0;
+            let normalizedEquity = equityData;
+
+            if (candleData.length > 0 && equityData.length > 0) {
+                const startEquityObj = equityData[0];
+                const startEquity = startEquityObj.value;
+                const startTime = startEquityObj.time;
+
+                // Find candle at or closest to startEquity time within a reasonable window
+                // Since both are sorted by time
+                let matchCandle = candleData.find(c => c.time >= startTime);
+
+                // Fallback: If no future candle (e.g. Equity is at end?), use last candle? 
+                // Or if Equity starts BEFORE all candles? Use first candle.
+                if (!matchCandle && candleData.length > 0) {
+                    matchCandle = candleData[0];
+                }
+
+                if (matchCandle && startEquity > 0) {
+                    const startPrice = matchCandle.close;
+                    scaleFactor = startPrice / startEquity;
+                    normalizedEquity = equityData.map(d => ({
+                        time: d.time,
+                        value: d.value * scaleFactor,
+                        original: d.value // Store original for legend
+                    }));
+                }
+            }
 
             // Chart Properties
             const chartOptions = {
@@ -266,11 +298,16 @@
             const equitySeries = chart.addLineSeries({
                 color: '#2962FF',
                 lineWidth: 2,
-                priceScaleId: 'left',
+                priceScaleId: 'right', // Align with Price (Re-based)
                 title: 'Equity',
                 crosshairMarkerVisible: true,
+                lastValueVisible: false, // Hide normalized value on axis label to avoid confusion? Or show it? 
+                // Showing it on axis might be confusing (showing 90k for equity). 
+                // But user wants to compare "amplitude".
+                // Let's keep it visible but maybe format it? 
+                // Actually, user wants alignment.
             });
-            equitySeries.setData(equityData);
+            equitySeries.setData(normalizedEquity);
 
             // ------------------------------------------
             // Marker Logic
@@ -329,7 +366,8 @@
                     components.push(`<span style="color:${color}">O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)}</span>`);
                 }
                 if (equity) {
-                    components.push(`<span style="color:#2962FF">Eq:${formatPrice(equity.value)}</span>`);
+                    const originalVal = (equity.original !== undefined) ? equity.original : (equity.value / scaleFactor);
+                    components.push(`<span style="color:#2962FF">Eq:${formatPrice(originalVal)}</span>`);
                 }
                 if (volume) {
                     components.push(`Vol:${formatVol(volume.value)}`);
@@ -352,10 +390,84 @@
                 chart.resize(container.clientWidth, container.clientHeight);
             });
 
+
+
+            // ------------------------------------------
+            // Dynamic Re-basing on Scroll/Zoom
+            // ------------------------------------------
+            let isUpdatingData = false;
+            const debouncedUpdate = (function (fn, ms) {
+                let timer = 0;
+                return function () {
+                    clearTimeout(timer);
+                    timer = setTimeout(fn, ms);
+                }
+            });
+
+            const handleRangeChange = debouncedUpdate(() => {
+                if (isUpdatingData) return;
+
+                const logicalRange = chart.timeScale().getVisibleLogicalRange();
+                if (!logicalRange) return;
+
+                // Find visible data indices
+                // Note: LightWeightCharts doesn't give direct data index access from logical range easily for custom arrays
+                // But logical range roughly maps to index if we assume 1 bar = 1 step.
+                // However, equityData might not match candleData one-to-one perfectly if there are gaps?
+                // Assuming 5m timeframe, they should match.
+                // Let's find first visible time from chart's timeScale is safer?
+
+                // Actually, we can just iterate data to find first point >= logicalRange.from
+                // But 'from' is an index (float).
+                // Let's try to convert logical range to time is hard without API.
+                // Better: Chart provides coordinateToTime? No.
+
+                // Simpler: Use the bars series to get the time range?
+                // "The logical range is a range of indexes."
+                // So logicalRange.from (rounded) is the index in the MAIN series (Candles).
+
+                const fromIndex = Math.max(0, Math.floor(logicalRange.from));
+                if (fromIndex >= candleData.length) return;
+
+                const firstVisibleCandle = candleData[fromIndex];
+                if (!firstVisibleCandle) return;
+
+                const visibleStartTime = firstVisibleCandle.time;
+
+                // 2. Find Alignment Point
+                // We want to align Equity to Price at the FIRST MOMENT where both exist within (or after) the visible range.
+                const firstEquityTime = equityData.length > 0 ? equityData[0].time : 0;
+                const alignmentTime = Math.max(visibleStartTime, firstEquityTime);
+
+                // Find data points at alignmentTime
+                const refCandle = candleData.find(c => c.time >= alignmentTime);
+                const refEquity = equityData.find(e => e.time >= alignmentTime);
+
+                if (!refCandle || !refEquity) return;
+
+                if (refEquity.value > 0) {
+                    const newFactor = refCandle.close / refEquity.value;
+
+                    const newNormalized = equityData.map(d => ({
+                        time: d.time,
+                        value: d.value * newFactor,
+                        original: d.value
+                    }));
+
+                    isUpdatingData = true;
+                    equitySeries.setData(newNormalized);
+                    isUpdatingData = false;
+                }
+
+            }, 50); // 50ms debounce
+
+            chart.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
+
         } catch (e) {
             document.getElementById('error-display').style.display = 'block';
             document.getElementById('error-display').textContent = 'Chart Error: ' + e.message + '\n' + e.stack;
         }
+
     </script>
 
 </body>

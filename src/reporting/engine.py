@@ -188,8 +188,16 @@ class ReportEngine:
         # 2. Prepare Data for JSON
         
         # Candles
-        # LW Charts expects seconds for timestamp
+        # Candles
+        # Trim data for visualization (User doesn't want full 60-day warmup in the chart)
+        # Keep a small buffer (e.g. 2 days) for context before the start
+        vis_start = self.ctx.start_ts - pd.Timedelta(days=2) if self.ctx.start_ts else None
+        
         candles = self.ctx.candles.copy()
+        if vis_start:
+             candles = candles[candles["timestamp"] >= vis_start]
+        
+        # LW Charts expects seconds for timestamp
         if "timestamp" in candles.columns:
             candles["time"] = candles["timestamp"].astype('int64') // 10**9
         
