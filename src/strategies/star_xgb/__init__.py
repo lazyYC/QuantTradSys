@@ -6,6 +6,7 @@ from .labels import build_label_frame
 from .dataset import build_training_dataset, split_train_test
 from .model import StarTrainingResult, train_star_model
 from .runtime import StarRuntimeState, generate_realtime_signal
+from .adapter import StarXGBStrategy
 
 __all__ = [
     "StarIndicatorParams",
@@ -19,4 +20,5 @@ __all__ = [
     "train_star_model",
     "StarRuntimeState",
     "generate_realtime_signal",
+    "StarXGBStrategy",
 ]

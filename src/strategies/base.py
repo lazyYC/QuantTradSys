@@ -13,6 +13,14 @@ class BaseStrategy(ABC):
     All strategies (XGBoost, Deep Learning, etc.) must implement this interface.
     """
 
+    @property
+    def can_backtest_dev_data(self) -> bool:
+        """
+        Whether the strategy supports time-continuous backtesting on development (Train/Valid) data.
+        Defaults to True. Set to False for strategies that use random shuffling (e.g. Playground).
+        """
+        return True
+
     @abstractmethod
     def build_features(
         self, raw_data: pd.DataFrame, params: Dict[str, Any]

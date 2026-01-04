@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Sequence
 
 import optuna
 import pandas as pd
@@ -123,8 +123,6 @@ class StarXGBStrategy(BaseStrategy):
         )
 
     def get_optuna_params(self, trial: optuna.Trial) -> Dict[str, Any]:
-        from .optimization import suggest_indicator_params, suggest_model_params
-        
         # Use shared definition (exclude target params as they are fixed in config)
         ind_params = suggest_indicator_params(trial, future_window_choices=None)
         model_params = suggest_model_params(trial)
@@ -144,41 +142,27 @@ class StarXGBStrategy(BaseStrategy):
         filtered = {k: v for k, v in params.items() if k in valid_keys}
         return StarModelParams(**filtered)
 
+
     def backtest(
         self, 
         raw_data: pd.DataFrame, 
         params: Dict[str, Any], 
-        model_path: Optional[str] = None
+        model_path: Optional[str] = None,
+        **kwargs
     ) -> Any:
         from strategies.star_xgb.backtest import backtest_star_xgb
-        from strategies.star_xgb.dataset import split_train_test, prepend_warmup_rows, DEFAULT_WARMUP_BARS
+        # from strategies.star_xgb.dataset import split_train_test, prepend_warmup_rows, DEFAULT_WARMUP_BARS
         
         # Parse params
         indicator_params = self._parse_indicator_params(params)
         model_params = self._parse_model_params(params)
         
-        # We assume raw_data is the full dataset or the test set?
-        # Usually backtest is run on a specific set.
-        # For simplicity, let's assume raw_data is what we want to backtest on.
-        # But backtest_star_xgb expects prepared features or raw data?
-        # It expects `test_input` which is raw data with warmup.
-        
-        # If model_path is not provided, we can't really backtest unless we train on the fly?
-        # Or maybe we just return empty?
         if not model_path:
-             raise ValueError("model_path is required for StarXGB backtest")
-             
-        # We need to load metadata to get class_means/thresholds if they are not in params.
-        # Usually these are saved in the model directory or passed in params.
-        # For now, let's assume they are passed in params or we can't run.
-        # But wait, `backtest_star_xgb` needs `class_means`, `class_thresholds`.
-        # These come from the training result.
-        # If we are running from `report.py`, we might load them from DB (metrics?).
-        # Or maybe we should load them from the model artifact?
-        
-        # Let's assume params contains them if they were saved.
-        # If not, we might fail.
-        
+             # In backtesting context (e.g. report.py), we might not have a model if we are just testing logic, 
+             # but for StarXGB we need the booster.
+             # If None, backtest_star_xgb might fail or return empty.
+             pass
+
         class_means = params.get("class_means")
         class_thresholds = params.get("class_thresholds")
         feature_columns = params.get("feature_columns")
@@ -196,4 +180,60 @@ class StarXGBStrategy(BaseStrategy):
             feature_stats=feature_stats,
             transaction_cost=params.get("transaction_cost", 0.001),
             stop_loss_pct=params.get("stop_loss_pct", 0.005),
+            core_start=kwargs.get("core_start"),
         )
+
+def suggest_indicator_params(
+    trial: optuna.Trial, future_window_choices: Optional[Sequence[int]] = None
+) -> StarIndicatorParams:
+    """
+    Suggest indicator parameters using Optuna.
+    If future_window_choices is provided, also suggest future_window and return_threshold.
+    """
+    params = dict(
+        trend_window=trial.suggest_categorical("trend_window", [45, 60, 75]),
+        slope_window=trial.suggest_categorical("slope_window", [5, 10]),
+        atr_window=trial.suggest_categorical("atr_window", [14, 21, 28]),
+        volatility_window=trial.suggest_categorical("volatility_window", [15, 20, 30]),
+        volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
+        pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
+        upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
+        body_ratio_max=trial.suggest_float("body_ratio_max", 0.16, 0.22, step=0.02),
+        volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.55, 0.8, step=0.05),
+    )
+    
+    if future_window_choices:
+        params["future_window"] = trial.suggest_categorical(
+            "future_window", sorted(set(int(x) for x in future_window_choices))
+        )
+        params["future_return_threshold"] = trial.suggest_float(
+            "future_return_threshold", 0.0, 0.0001, step=0.0001
+        )
+    else:
+        # Defaults
+        params["future_window"] = 5
+        params["future_return_threshold"] = 0.001
+
+    return StarIndicatorParams(**params)
+
+
+def suggest_model_params(trial: optuna.Trial) -> StarModelParams:
+    return StarModelParams(
+        num_leaves=trial.suggest_int("num_leaves", 15, 63, step=8),
+        max_depth=trial.suggest_int("max_depth", 3, 6),
+        learning_rate=trial.suggest_float("learning_rate", 0.03, 0.2, step=0.01),
+        n_estimators=trial.suggest_int("n_estimators", 200, 600, step=50),
+        min_child_samples=trial.suggest_int("min_child_samples", 5, 25, step=5),
+        subsample=trial.suggest_float("subsample", 0.6, 0.9, step=0.05),
+        colsample_bytree=trial.suggest_float("colsample_bytree", 0.6, 0.9, step=0.05),
+        feature_fraction_bynode=trial.suggest_float(
+            "feature_fraction_bynode", 0.6, 0.9, step=0.05
+        ),
+        lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
+        lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
+        bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
+        decision_threshold=trial.suggest_float(
+            "decision_threshold", 0.004, 0.007, step=0.0001
+        ),
+    )
+

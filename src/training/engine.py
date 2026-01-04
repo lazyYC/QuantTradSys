@@ -301,9 +301,14 @@ class TrainingEngine:
         # We only really care about the TEST backtest for reporting OOS performance.
         # Train/Valid are optimization artifacts.
         
-        datasets_to_run = [
-            ("test", self.ctx.test_df),
-        ]
+        datasets_to_run = []
+        if self.ctx.strategy_instance.can_backtest_dev_data:
+            datasets_to_run.extend([
+                ("train", self.ctx.dev_df.iloc[: -self.ctx.valid_days * 288] if self.ctx.valid_days > 0 else self.ctx.dev_df), 
+                ("valid", self.ctx.dev_df.iloc[-self.ctx.valid_days * 288 :] if self.ctx.valid_days > 0 else pd.DataFrame()),
+            ])
+        
+        datasets_to_run.append(("test", self.ctx.test_df))
         
         full_sorted_df = pd.concat([self.ctx.dev_df, self.ctx.test_df]).sort_values("timestamp")
         
