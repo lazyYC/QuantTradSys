@@ -200,3 +200,87 @@ class MarketDataStore:
             )
             result = session.execute(stmt)
             return result.rowcount
+
+    def find_missing_intervals(
+        self,
+        symbol: str, 
+        timeframe: str,
+        start_ts: int,
+        end_ts: int,
+        interval_ms: int
+    ) -> List[Tuple[int, int]]:
+        """
+        Find gaps in stored data using SQL window functions.
+        start_ts, end_ts are in milliseconds.
+        Returns list of (gap_start_ms, gap_end_ms).
+        """
+        from sqlalchemy import text
+        
+        missing_ranges = []
+        
+        with get_session() as session:
+            # 1. Check gap before the first record
+            stmt_min = select(func.min(OHLCV.ts)).where(
+                OHLCV.symbol == symbol,
+                OHLCV.timeframe == timeframe,
+                OHLCV.ts >= start_ts,
+                OHLCV.ts <= end_ts
+            )
+            min_ts = session.execute(stmt_min).scalar()
+            
+            if min_ts is None:
+                # No data at all in range -> full gap
+                return [(start_ts, end_ts)]
+                
+            if isinstance(min_ts, int) and min_ts > start_ts:
+                missing_ranges.append((start_ts, min_ts - interval_ms))
+            
+            # 2. Check gaps between records using LAG
+            # This requires a more complex query, often easier with raw SQL for window functions in simple usage
+            # finding pairs where ts - prev_ts > interval
+            
+            # Note: We limit the query to the requested range to improve performance
+            query_sql = text("""
+                WITH ordered AS (
+                    SELECT ts, LAG(ts) OVER (ORDER BY ts) as prev_ts
+                    FROM ohlcv
+                    WHERE symbol = :symbol 
+                      AND timeframe = :timeframe
+                      AND ts >= :start_ts 
+                      AND ts <= :end_ts
+                )
+                SELECT prev_ts, ts
+                FROM ordered
+                WHERE (ts - prev_ts) > :interval_ms
+            """)
+            
+            result = session.execute(query_sql, {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "interval_ms": interval_ms
+            })
+            
+            for row in result:
+                prev_ts = row[0]
+                curr_ts = row[1]
+                # Gap is from next candle after prev to candle before curr
+                gap_start = int(prev_ts + interval_ms)
+                gap_end = int(curr_ts - interval_ms)
+                if gap_end >= gap_start:
+                    missing_ranges.append((gap_start, gap_end))
+            
+            # 3. Check gap after the last record
+            stmt_max = select(func.max(OHLCV.ts)).where(
+                OHLCV.symbol == symbol,
+                OHLCV.timeframe == timeframe,
+                OHLCV.ts >= start_ts,
+                OHLCV.ts <= end_ts
+            )
+            max_ts = session.execute(stmt_max).scalar()
+            
+            if isinstance(max_ts, int) and max_ts < end_ts:
+                 missing_ranges.append((max_ts + interval_ms, end_ts))
+                 
+        return missing_ranges
