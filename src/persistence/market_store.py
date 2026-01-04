@@ -5,6 +5,7 @@ Encapsulates all OHLCV access logic using SQLAlchemy.
 import logging
 from typing import List, Sequence, Optional, Tuple
 from datetime import datetime, timezone
+import numpy as np
 
 import pandas as pd
 from sqlalchemy import select, delete, func
@@ -41,38 +42,43 @@ class MarketDataStore:
         if isinstance(data, pd.DataFrame):
             if data.empty:
                 return 0
-            records = data.to_dict(orient="records")
-            # Transform DF records to schema format
-            clean_records = []
-            for r in records:
-                # Ensure timestamp format
-                if "ts" not in r and "timestamp" in r:
-                     # timestamp is datetime64[ns, UTC]
-                     ts_val = r["timestamp"]
-                     if isinstance(ts_val, pd.Timestamp):
-                         ts_ms = int(ts_val.timestamp() * 1000)
-                         iso_str = ts_val.isoformat()
-                     else:
-                         # assume ms int
-                         ts_ms = int(ts_val)
-                         iso_str = datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).isoformat()
-                elif "ts" in r:
-                    ts_ms = int(r["ts"])
-                    iso_str = r.get("iso_ts") or datetime.fromtimestamp(ts_ms/1000, tz=timezone.utc).isoformat()
-                else:
-                    continue  # Skip invalid
+                
+            # Vectorized processing
+            df = data.copy()
+            
+            # 1. Ensure 'timestamp' is handled (ccxt_fetcher uses 'timestamp')
+            # If 'timestamp' exists and is datetime
+            if "timestamp" in df.columns:
+                # Ensure UTC
+                if pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+                    # If already tz-aware, convert to UTC, else localize
+                    if df["timestamp"].dt.tz is None:
+                        df["timestamp"] = df["timestamp"].dt.tz_localize(timezone.utc)
+                    else:
+                        df["timestamp"] = df["timestamp"].dt.tz_convert(timezone.utc)
+                        
+                df["ts"] = df["timestamp"].astype(np.int64) // 10**6
+                df["iso_ts"] = df["timestamp"].apply(lambda x: x.isoformat())
+            
+            # If input has 'ts' but no 'timestamp' or 'iso_ts' (e.g. from some other source)
+            elif "ts" in df.columns and "iso_ts" not in df.columns:
+                df["iso_ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True).apply(lambda x: x.isoformat())
+            
+            # 2. Add metadata
+            df["symbol"] = symbol
+            df["timeframe"] = timeframe
+            
+            # 3. Select columns matching DB schema
+            # Schema: symbol, timeframe, ts, iso_ts, open, high, low, close, volume
+            required_cols = ["symbol", "timeframe", "ts", "iso_ts", "open", "high", "low", "close", "volume"]
+            
+            # Ensure float type for OHLCV
+            for col in ["open", "high", "low", "close", "volume"]:
+                 df[col] = df[col].astype(float)
+                 
+            # Convert to dict records
+            clean_records = df[required_cols].to_dict(orient="records")
 
-                clean_records.append({
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "ts": ts_ms,
-                    "iso_ts": iso_str,
-                    "open": float(r["open"]),
-                    "high": float(r["high"]),
-                    "low": float(r["low"]),
-                    "close": float(r["close"]),
-                    "volume": float(r["volume"]),
-                })
         else:
              # Assume list of tuples from legacy fetcher
              # (ts, iso, o, h, l, c, v)
