@@ -26,6 +26,8 @@ from utils.pid_lock import PIDLock, AlreadyRunningError
 
 LOGGER = logging.getLogger(__name__)
 
+SAFE_BUFFER_SIZE = 1000
+
 def _safe_concat(base: pd.DataFrame, row: pd.DataFrame, max_rows: int) -> pd.DataFrame:
     if base.empty:
         result = row.reset_index(drop=True)
@@ -151,8 +153,7 @@ class RealtimeEngine:
 
         self.price_df = prepared.reset_index(drop=True)
 
-        bars_per_day = int(pd.Timedelta(days=1) / timeframe_to_offset(timeframe))
-        self.max_rows = max(int(lookback_days * bars_per_day * 1.1), len(self.price_df))
+        self.max_rows = SAFE_BUFFER_SIZE
 
         self.subscriber: Optional[BinanceKlineSubscriber] = None
 
