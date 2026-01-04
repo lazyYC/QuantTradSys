@@ -57,62 +57,67 @@ def fetch_yearly_ohlcv(
     
     timeframe_ms = timeframe_to_milliseconds(timeframe)
     ongoing_open_ms = (now_ms // timeframe_ms) * timeframe_ms
-
-    since_ms = window_start_ms
-
-    # 1. Determine Start Time based on Store
+    
+    # Determine the target end time (exclusive of the current open candle)
+    target_end_ms = ongoing_open_ms - 1
+    
+    # Store-based Logic (Smart Sync)
     if market_store:
-        last_ts = market_store.get_latest_timestamp(canonical_symbol, timeframe)
-        if last_ts is not None:
-             LOGGER.debug("Last stored timestamp: %s", last_ts)
-             market_store.delete_recent(canonical_symbol, timeframe, ongoing_open_ms)
-             
-             # Re-check last after delete?
-             last_ts = market_store.get_latest_timestamp(canonical_symbol, timeframe)
-             if last_ts:
-                 since_ms = max(window_start_ms, last_ts + timeframe_ms)
-             else:
-                 since_ms = window_start_ms
+        # 1. Clean up potential partial/open candles at the tip
+        market_store.delete_recent(canonical_symbol, timeframe, ongoing_open_ms)
+        
+        # 2. Find ALL missing intervals in the target window [window_start_ms, target_end_ms]
+        # This covers both historical gaps and the "new data" at the tail.
+        # It relies on SQL Window Functions which is efficient.
+        gaps = market_store.find_missing_intervals(
+            canonical_symbol,
+            timeframe,
+            start_ts=window_start_ms,
+            end_ts=target_end_ms,
+            interval_ms=timeframe_ms
+        )
+        
+        total_inserted = 0
+        for start_ms, end_ms in gaps:
+            start_dt = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
+            end_dt = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
+            
+            LOGGER.info(
+                "Fetching missing range for %s %s: %s to %s",
+                canonical_symbol, timeframe, start_dt, end_dt
+            )
+            
+            # fetch_ohlcv_batches takes (since_ms, end_datetime_utc)
+            new_rows = fetch_ohlcv_batches(
+                exchange, exchange_symbol, timeframe, start_ms, end_dt
+            )
+            
+            if new_rows:
+                # Filter strictly within range? batches usually handles strict since, but end might overshoot?
+                # db upsert is safe on conflict, but let's filter ensuring no future data
+                valid_rows = [r for r in new_rows if r[0] <= target_end_ms]
+                if valid_rows:
+                    count = market_store.upsert_candles(valid_rows, canonical_symbol, timeframe)
+                    total_inserted += count
+                    
+        if total_inserted > 0:
+            LOGGER.info("Total upserted rows: %s", total_inserted)
+            
+        # 3. Load Final Result
+        start_load_dt = datetime.fromtimestamp(window_start_ms / 1000, tz=timezone.utc)
+        df = market_store.load_candles(canonical_symbol, timeframe, start_ts=start_load_dt)
 
-    # 2. Fetch New Data
-    new_rows = []
-    if since_ms <= now_ms:
+    else:
+        # No Store: Fetch everything in memory
         new_rows = fetch_ohlcv_batches(
-            exchange, exchange_symbol, timeframe, since_ms, utc_now
+            exchange, exchange_symbol, timeframe, window_start_ms, utc_now
         )
         if new_rows:
             new_rows = [row for row in new_rows if int(row[0]) < ongoing_open_ms]
-    else:
-        LOGGER.info("No new candles required for %s %s", canonical_symbol, timeframe)
-
-    # 3. Persistence
-    if market_store and new_rows:
-        inserted = market_store.upsert_candles(new_rows, canonical_symbol, timeframe)
-        LOGGER.info("Inserted %s rows into Store", inserted)
-
-    # 4. Load Window & Backfill
-    if market_store:
-        # Load from store
-        start_dt = datetime.fromtimestamp(window_start_ms / 1000, tz=timezone.utc)
-        df = market_store.load_candles(canonical_symbol, timeframe, start_ts=start_dt)
-        
-        if not df.empty:
-            backfilled = _backfill_missing_candles(
-                market_store=market_store,
-                exchange=exchange,
-                exchange_symbol=exchange_symbol,
-                canonical_symbol=canonical_symbol,
-                timeframe=timeframe,
-                df=df,
-            )
-            if backfilled:
-                 LOGGER.info("Backfilled %s historical candles", backfilled)
-                 # Reload
-                 df = market_store.load_candles(canonical_symbol, timeframe, start_ts=start_dt)
-    else:
+            
         df = build_dataframe(new_rows)
 
-    # 6. Final Filter
+    # Final Filter
     if not df.empty:
         cutoff_ts = pd.to_datetime(ongoing_open_ms, unit="ms", utc=True)
         df = df[df["timestamp"] < cutoff_ts].reset_index(drop=True)
@@ -121,82 +126,6 @@ def fetch_yearly_ohlcv(
         save_dataframe(df, output_path)
 
     return df
-
-
-def _backfill_missing_candles(
-    *,
-    market_store: MarketDataStore,
-    exchange: ccxt.Exchange,
-    exchange_symbol: str,
-    canonical_symbol: str,
-    timeframe: str,
-    df: pd.DataFrame,
-) -> int:
-    """Detect gaps in stored OHLCV data and refetch missing candles."""
-    timeframe_ms = timeframe_to_milliseconds(timeframe)
-    windows = _find_missing_windows(df, timeframe_ms)
-    if not windows:
-        return 0
-
-    total_inserted = 0
-    for start_ms, end_ms in windows:
-        start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc)
-        end_iso = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc)
-        LOGGER.warning(
-            "Detected gap for %s %s between %s and %s; attempting refetch",
-            canonical_symbol,
-            timeframe,
-            start_iso,
-            end_iso,
-        )
-        end_dt = end_iso
-        rows = fetch_ohlcv_batches(
-            exchange,
-            exchange_symbol,
-            timeframe,
-            start_ms,
-            end_dt,
-        )
-        if not rows:
-            LOGGER.warning(
-                "Refetch returned no candles for gap %s - %s (%s %s)",
-                start_iso,
-                end_iso,
-                canonical_symbol,
-                timeframe,
-            )
-            continue
-        inserted = market_store.upsert_candles(rows, canonical_symbol, timeframe)
-        total_inserted += inserted
-    return total_inserted
-
-
-def _find_missing_windows(df: pd.DataFrame, timeframe_ms: int) -> List[tuple[int, int]]:
-    """
-    Return start/end (ms) ranges for missing candles inside df using vectorized check.
-    Optimization: Uses pandas diff() instead of iterating rows.
-    """
-    if df.empty:
-        return []
-    
-    timestamps = df["timestamp"].astype("int64") // 1_000_000
-    diffs = timestamps.diff()
-    
-    gap_mask = diffs > timeframe_ms
-    if not gap_mask.any():
-        return []
-
-    windows: List[tuple[int, int]] = []
-    
-    # Vectorized Gap Extraction
-    gap_starts = timestamps.shift(1)[gap_mask] + timeframe_ms
-    gap_ends = timestamps[gap_mask] - timeframe_ms
-    
-    # Zip them
-    for start, end in zip(gap_starts, gap_ends):
-        windows.append((int(start), int(end)))
-        
-    return windows
 
 
 def save_dataframe(df: pd.DataFrame, path: Path) -> Path:
@@ -209,5 +138,4 @@ def save_dataframe(df: pd.DataFrame, path: Path) -> Path:
 
 __all__ = [
     "fetch_yearly_ohlcv",
-    # Expose others if needed by scripts, but ideally scripts use fetch_yearly_ohlcv
 ]
