@@ -21,10 +21,9 @@ def _make_serializable(obj: Any) -> Any:
         return {k: _make_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_make_serializable(v) for v in obj]
-    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64,
-                          np.uint8, np.uint16, np.uint32, np.uint64)):
+    elif isinstance(obj, (np.integer, int)):
         return int(obj)
-    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+    elif isinstance(obj, (np.floating, float)):
         return float(obj)
     elif isinstance(obj, (np.bool_, bool)):
         return bool(obj)
