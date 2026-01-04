@@ -8,10 +8,32 @@ from typing import Any, Dict, Optional
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import select
 
+import numpy as np
+
 from database.connection import get_session
 from database.schema import StrategyParam
 
 LOGGER = logging.getLogger(__name__)
+
+def _make_serializable(obj: Any) -> Any:
+    """Recursively convert numpy types to native python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_make_serializable(v) for v in obj]
+    elif isinstance(obj, (np.int_, np.intc, np.intp, np.int8, np.int16, np.int32, np.int64,
+                          np.uint8, np.uint16, np.uint32, np.uint64)):
+        return int(obj)
+    elif isinstance(obj, (np.float_, np.float16, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return _make_serializable(obj.tolist())
+    elif isinstance(obj, (datetime, Path)):
+        return str(obj)
+    return obj
+
 
 @dataclass
 class StrategyRecord:
@@ -44,6 +66,10 @@ def save_strategy_params(
     payload = dict(params)
     payload["stop_loss_pct"] = stop_loss_pct
     payload["transaction_cost"] = transaction_cost
+    
+    # Ensure serializable
+    payload = _make_serializable(payload)
+    metrics = _make_serializable(metrics)
     
     with get_session() as session:
         stmt = insert(StrategyParam).values(
