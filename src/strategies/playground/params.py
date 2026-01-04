@@ -23,12 +23,21 @@ class StarIndicatorParams:
     volume_ratio_max: float
     future_window: int
     future_return_threshold: float
+    
+    # Momentum / Volatility
+    rsi_window: int = 14
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    bb_window: int = 20
+    bb_std: float = 2.0
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
         "upper_shadow_min": 2,
         "body_ratio_max": 2,
         "volume_ratio_max": 2,
         "future_return_threshold": 3,
+        "bb_std": 1,
     }
 
     def as_dict(self, *, rounded: bool = False) -> Dict[str, float | int]:

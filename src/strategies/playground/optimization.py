@@ -460,6 +460,17 @@ def suggest_indicator_params(
         params["future_window"] = 5
         params["future_return_threshold"] = 0.001
 
+    # Fixed Parameters for Momentum/Volatility
+    # We inject them here so they are carried over to the engine's params
+    params.update({
+        "rsi_window": 14,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal": 9,
+        "bb_window": 20,
+        "bb_std": 2.0,
+    })
+
     return StarIndicatorParams(**params)
 
 
