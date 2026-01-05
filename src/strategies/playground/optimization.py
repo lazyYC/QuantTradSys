@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Sequence
 
+import warnings
+from optuna.exceptions import ExperimentalWarning
+
+# Suppress Optuna experimental warnings (multivariate, group)
+warnings.filterwarnings("ignore", category=ExperimentalWarning)
+
 import optuna
 from optuna import Trial
 from optuna.trial import TrialState
