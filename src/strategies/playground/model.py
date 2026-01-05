@@ -354,7 +354,7 @@ def _simulate_trades(
                     continue
 
         if open_trade is None and expected_ret >= threshold:
-            if predicted_class == 2.0:
+            if predicted_class == 1.0:
                 open_trade = {
                     "side": "LONG",
                     "entry_time": ts,
@@ -365,7 +365,7 @@ def _simulate_trades(
                     "entry_class": predicted_class,
                     "entry_zscore": expected_ret,
                 }
-            elif predicted_class == -2.0:
+            elif predicted_class == -1.0:
                 open_trade = {
                     "side": "SHORT",
                     "entry_time": ts,
@@ -651,8 +651,8 @@ def _evaluate_vectorized(
     # _simulate_trades logic: if expected_ret >= threshold: check class.
     
     # Let's match _simulate_trades logic roughly
-    mask_long = (pred_classes == 2.0) & (expected_returns >= threshold)
-    mask_short = (pred_classes == -2.0) & (expected_returns >= threshold)
+    mask_long = (pred_classes == 1.0) & (expected_returns >= threshold)
+    mask_short = (pred_classes == -1.0) & (expected_returns >= threshold)
     
     pnl = np.zeros(len(df))
     

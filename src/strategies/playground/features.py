@@ -178,6 +178,22 @@ class StarFeatureCache:
         frame["log_return_1"] = log_ret
         frame["log_return_5"] = log_ret.rolling(5).sum()
         
+        # 5. Trend Z-Score (Dynamic Deviation)
+        # Calculate std for the trend window specifically to get true Z-Score
+        trend_std = close.rolling(window=params.trend_window, min_periods=params.trend_window).std(ddof=0)
+        frame["trend_z_score"] = (close - trend_ma) / trend_std.replace(0.0, np.nan)
+        
+        # 6. Short-term Deviations (MA5, MA15)
+        # Capture short term overextension
+        ma_5 = close.rolling(window=5, min_periods=5).mean()
+        ma_15 = close.rolling(window=15, min_periods=15).mean()
+        frame["dist_ma_5"] = (close - ma_5) / ma_5.replace(0.0, np.nan)
+        frame["dist_ma_15"] = (close - ma_15) / ma_15.replace(0.0, np.nan)
+        
+        # 7. BB Width Delta
+        # Expansion/Contraction
+        frame["bb_width_delta"] = (bb_width - bb_width.shift(1)) / bb_width.shift(1).replace(0.0, np.nan)
+        
         # --- NEW FEATURES END ---
 
         # --- NEW FEATURES END ---
@@ -201,7 +217,7 @@ class StarFeatureCache:
         frame["shadow_diff"] = frame["upper_shadow_ratio"] - frame["lower_shadow_ratio"]
 
         frame = frame.drop(
-            columns=["trend_ma", "rolling_high", "rolling_low", "atr", "volume"],
+            columns=["rolling_high", "rolling_low", "atr", "volume"],
             errors="ignore",
         )
         frame = frame.dropna().reset_index(drop=True)

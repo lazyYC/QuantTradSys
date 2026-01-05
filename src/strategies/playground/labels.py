@@ -1,4 +1,4 @@
-"""star_xgb 策略的標籤建構。"""
+"""star_xgb 策略的標籤建構 (Mean Reversion Dynamic Targets)。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import pandas as pd
 
 from .params import StarIndicatorParams
 
-RETURN_CLASSES = (-2, -1, 0, 1, 2)
+# 3 Classes: -1 (Short), 0 (Neutral), 1 (Long)
+RETURN_CLASSES = (-1, 0, 1)
 
 
 def build_label_frame(
@@ -18,80 +19,99 @@ def build_label_frame(
     *,
     thresholds: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
-    """根據特徵資料建立多分類標籤與報酬欄位。"""
-    required = {
-        "timestamp",
-        "close",
-        "low",
-        "high",
-        "upper_shadow_ratio",
-        "body_ratio",
-        "volume_ratio",
-    }
+    """
+    根據 Mean Reversion 邏輯建立標籤。
+    Target: Trend MA
+    Logic: Dynamic Triple Barrier
+    """
+    required = {"timestamp", "close", "high", "low", "trend_ma"}
     missing = required.difference(features.columns)
     if missing:
         raise ValueError(f"標籤建構缺少欄位: {sorted(missing)}")
 
-    future_window = max(int(params.future_window), 1)
     close = features["close"].astype(float)
-    low = features["low"].astype(float)
     high = features["high"].astype(float)
+    low = features["low"].astype(float)
+    trend_ma = features["trend_ma"].astype(float)
 
+    future_window = max(int(params.future_window), 1)
+    
+    # 預設參數 (若 params 中無設定則使用預設值)
+    # stop_loss_pct 應由 params 提供
+    stop_loss_pct = getattr(params, "stop_loss_pct", 0.005)
+    # min_profit_threshold 使用 future_return_threshold
+    min_profit_pct = params.future_return_threshold
+    profit_ratio = 0.8  # 回歸目標的 80%
+
+    # Forward Window Calculation
+    # 使用 FixedForwardWindowIndexer 來正確計算未來窗口的極值
+    indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=future_window)
+    # shift(-1) 因為我們是在當前 bar 結束時做決策，看向未來 N 根 (不含當前)
+    # 但 FixedForwardWindow 包含起點。
+    # 嚴謹來說：Entry Price = Close.
+    # High/Low Check 應從 Next Bar 開始。
+    # 所以先 shift(-1) 再 rolling 是正確的。
+    future_max_high = high.shift(-1).rolling(window=indexer).max()
+    future_min_low = low.shift(-1).rolling(window=indexer).min()
+
+    # Calculate Distance and Targets
+    dist = close - trend_ma
+    dist_pct = (dist.abs() / close).replace([np.inf, -np.inf], 0.0)
+
+    # 只有當乖離夠大才有交易價值
+    valid_mask = dist_pct >= min_profit_pct
+
+    labels = np.zeros(len(close), dtype=int)
+
+    # --- Long Logic (Price < MA) ---
+    # 1. 位置判斷: 收盤價在均線下，且乖離夠大
+    long_mask = (dist < 0) & valid_mask
+    
+    # 2. 目標價格
+    long_tp = close + dist.abs() * profit_ratio
+    long_sl = close * (1.0 - stop_loss_pct)
+
+    # 3. Triple Barrier Check
+    # 條件: 未來 N 根內，最高價觸及止盈
+    # 且: 最低價未觸及止損 (這裡用保守估計：整個窗口的最低價都必須高於止損)
+    # 這比 "先碰止盈還是先碰止損" 更嚴格，但在 Vectorized 下是安全的假設。
+    long_success = (future_max_high >= long_tp) & (future_min_low > long_sl)
+    
+    labels[long_mask & long_success] = 1
+
+    # --- Short Logic (Price > MA) ---
+    # 1. 位置判斷: 收盤價在均線上，且乖離夠大
+    short_mask = (dist > 0) & valid_mask
+    
+    # 2. 目標價格
+    short_tp = close - dist.abs() * profit_ratio
+    short_sl = close * (1.0 + stop_loss_pct)
+
+    # 3. Triple Barrier Check
+    # 條件: 未來 N 根內，最低價觸及止盈
+    # 且: 最高價未觸及止損
+    short_success = (future_min_low <= short_tp) & (future_max_high < short_sl)
+
+    labels[short_mask & short_success] = -1
+
+    # --- Auxiliary Columns ---
+    # 為了保持 dataset 結構完整性，保留 future_close_return 計算
     future_close = close.shift(-future_window)
-    future_low = low.shift(-1).rolling(window=future_window, min_periods=1).min()
-    future_high = high.shift(-1).rolling(window=future_window, min_periods=1).max()
-
-    future_close_return = (future_close - close) / close.replace(0.0, pd.NA)
-    future_min_return = (future_low - close) / close.replace(0.0, pd.NA)
-    future_short_return = -future_close_return
-    future_best_short_return = -future_min_return
-    future_long_return = future_close_return
-    future_best_long_return = (future_high - close) / close.replace(0.0, pd.NA)
-
-    if thresholds is None:
-        valid_returns = future_long_return.dropna().to_numpy()
-        if valid_returns.size == 0:
-            thresholds = {"q10": 0.0, "q25": 0.0, "q75": 0.0, "q90": 0.0}
-        else:
-            q10, q25, q75, q90 = np.quantile(valid_returns, [0.1, 0.25, 0.75, 0.9])
-            thresholds = {
-                "q10": float(q10),
-                "q25": float(q25),
-                "q75": float(q75),
-                "q90": float(q90),
-            }
-    else:
-        thresholds = {
-            "q10": float(thresholds.get("q10", 0.0)),
-            "q25": float(thresholds.get("q25", 0.0)),
-            "q75": float(thresholds.get("q75", 0.0)),
-            "q90": float(thresholds.get("q90", 0.0)),
-        }
-
-    def _assign_class(value: float) -> int:
-        if np.isnan(value):
-            return 0
-        if value >= thresholds["q90"]:
-            return 2
-        if value >= thresholds["q75"]:
-            return 1
-        if value <= thresholds["q10"]:
-            return -2
-        if value <= thresholds["q25"]:
-            return -1
-        return 0
-
-    return_class = future_long_return.apply(_assign_class).astype(int)
-
+    future_long_return = (future_close - close) / close.replace(0.0, pd.NA)
+    future_short_return = -future_long_return
+    
+    # 這裡的欄位名稱必須與 dataset.py 或 backtest.py 預期的一致
     label_frame = features[["timestamp"]].copy()
-    label_frame["future_close_return"] = future_close_return
-    label_frame["future_min_return"] = future_min_return
-    label_frame["future_short_return"] = future_short_return
-    label_frame["future_best_short_return"] = future_best_short_return
     label_frame["future_long_return"] = future_long_return
-    label_frame["future_best_long_return"] = future_best_long_return
-    label_frame["return_class"] = return_class
-    return label_frame, thresholds
+    label_frame["future_short_return"] = future_short_return
+    label_frame["return_class"] = labels # Explicit name matching TARGET_COLUMN usually
+    
+    # 補上舊欄位以免 break code (雖然 dataset.py 裡 list_feature_columns 排除它們，但 merge 時可能用到)
+    label_frame["future_min_return"] = 0.0
+    label_frame["future_best_short_return"] = 0.0
+    label_frame["future_best_long_return"] = 0.0
+    label_frame["future_close_return"] = future_long_return
 
+    return label_frame, {}
 
 __all__ = ["build_label_frame", "RETURN_CLASSES"]

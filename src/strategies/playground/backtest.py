@@ -147,8 +147,8 @@ def backtest_star_xgb(
         pred_class = CLASS_VALUES[pred_idx]
         threshold = float(model_params.decision_threshold)
         
-        mask_long = (pred_class == 2.0) & (expected_returns >= threshold)
-        mask_short = (pred_class == -2.0) & (expected_returns >= threshold)
+        mask_long = (pred_class == 1.0) & (expected_returns >= threshold)
+        mask_short = (pred_class == -1.0) & (expected_returns >= threshold)
         
         pnl = np.zeros(len(dataset))
         if mask_long.any():

@@ -125,6 +125,7 @@ def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
         "high",
         "low",
         "close",
+        "trend_ma",
     }
     return [col for col in dataset.columns if col not in excluded]
 

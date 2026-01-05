@@ -31,6 +31,7 @@ class StarIndicatorParams:
     macd_signal: int = 9
     bb_window: int = 20
     bb_std: float = 2.0
+    stop_loss_pct: float = 0.005
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
         "upper_shadow_min": 2,

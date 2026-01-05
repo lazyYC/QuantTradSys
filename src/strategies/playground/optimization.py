@@ -456,7 +456,7 @@ def suggest_indicator_params(
             "future_window", sorted(set(int(x) for x in future_window_choices))
         )
         params["future_return_threshold"] = trial.suggest_float(
-            "future_return_threshold", 0.0, 0.0001, step=0.0001
+            "future_return_threshold", 0.002, 0.01, step=0.001
         )
     else:
         # Defaults for when not optimizing target (these will be overwritten by fixed config usually)
@@ -464,7 +464,7 @@ def suggest_indicator_params(
         # We can put dummy values here, as they should be overridden or ignored if we are using fixed targets.
         # However, StarIndicatorParams validation might require them.
         params["future_window"] = 5
-        params["future_return_threshold"] = 0.001
+        params["future_return_threshold"] = 0.005
 
     # Fixed Parameters for Momentum/Volatility
     # We inject them here so they are carried over to the engine's params
