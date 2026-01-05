@@ -180,7 +180,11 @@ class StarFeatureCache:
         
         # --- NEW FEATURES END ---
 
-        frame["trade_amount"] = close * volume
+        # --- NEW FEATURES END ---
+
+        # Removed trade_amount (non-stationary)
+        # frame["trade_amount"] = close * volume
+        
         frame["open_rel"] = (open_ - safe_prev_close) / safe_prev_close
         frame["high_rel"] = (high - safe_prev_close) / safe_prev_close
         frame["low_rel"] = (low - safe_prev_close) / safe_prev_close
@@ -227,7 +231,6 @@ def _compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
         ],
         axis=1,
     )
-    true_range = tr_components.max(axis=1)
     true_range = tr_components.max(axis=1)
     return true_range.rolling(window=window, min_periods=window).mean()
 
