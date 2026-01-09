@@ -196,6 +196,14 @@
         <!-- Distribution -->
         <div class="section-title">Trade Distribution</div>
         /*INJECT_DISTRIBUTION*/
+
+        <!-- Analysis -->
+        <div class="section-title">Analysis</div>
+        /*INJECT_ANALYSIS*/
+
+        <!-- Trade List -->
+        <div class="section-title">Trade List</div>
+        /*INJECT_TRADELIST*/
     </div>
 
     <script>
@@ -346,36 +354,6 @@
             let isScheduled = false;
             let lastParam = null;
 
-            function updateLegend() {
-                const param = lastParam;
-                isScheduled = false;
-
-                if (!param || !param.time) {
-                    // keeping last value or clear? let's clear if out of chart
-                    // legend.innerHTML = '';
-                    return;
-                }
-
-                const candle = param.seriesData.get(candlestickSeries);
-                const equity = param.seriesData.get(equitySeries);
-                const volume = param.seriesData.get(volumeSeries);
-
-                let components = [];
-                if (candle) {
-                    const color = candle.close >= candle.open ? '#089981' : '#f23645';
-                    components.push(`<span style="color:${color}">O:${formatPrice(candle.open)} H:${formatPrice(candle.high)} L:${formatPrice(candle.low)} C:${formatPrice(candle.close)}</span>`);
-                }
-                if (equity) {
-                    const originalVal = (equity.original !== undefined) ? equity.original : (equity.value / scaleFactor);
-                    components.push(`<span style="color:#2962FF">Eq:${formatPrice(originalVal)}</span>`);
-                }
-                if (volume) {
-                    components.push(`Vol:${formatVol(volume.value)}`);
-                }
-
-                legend.innerHTML = components.join(' &nbsp; | &nbsp; ');
-            }
-
             chart.subscribeCrosshairMove((param) => {
                 lastParam = param;
                 if (!isScheduled) {
@@ -383,6 +361,96 @@
                     isScheduled = true;
                 }
             });
+
+            function updateLegend() {
+                isScheduled = false;
+                const param = lastParam;
+
+                // Defensive check for param validity
+                // Ensure param, param.time, and param.point exist before using them
+                let validCrosshair = (
+                    param &&
+                    param.time &&
+                    param.point &&
+                    param.point.x >= 0 &&
+                    param.point.y >= 0
+                );
+
+                let time = null;
+                if (validCrosshair) {
+                    time = param.time;
+                } else if (candleData.length > 0) {
+                    time = candleData[candleData.length - 1].time;
+                }
+
+                if (!time) {
+                    legend.innerHTML = '';
+                    return;
+                }
+
+                let candle = null;
+                let equity = null;
+                let volume = null;
+
+                // Safe access to seriesData
+                if (validCrosshair && param && param.seriesData) {
+                    try {
+                        candle = param.seriesData.get(candlestickSeries);
+                        equity = param.seriesData.get(equitySeries);
+                        volume = param.seriesData.get(volumeSeries);
+                    } catch (e) {
+                        // Ignore lookup errors
+                    }
+                }
+
+                // Fallback lookup if undefined (e.g. crosshair on empty space or fallback mode)
+                if (!candle && candleData.length > 0) {
+                    // Binary search or find? Data is sorted. Simple find for now or map?
+                    // Optimization: If we assume simple array...
+                    // Let's use simple find for robustness, though slow for big data. 
+                    // Actually, for fallback, we know we want the last one usually.
+                    if (!validCrosshair) {
+                        candle = candleData[candleData.length - 1];
+                        equity = equityData.find(e => e.time === time); // Might be slow
+                        volume = volumeData.find(v => v.time === time);
+                    } else {
+                        // Hovering but no data? (Gap)
+                    }
+                }
+
+                let components = [];
+
+                // Helper to pad
+                const pad = (n) => n.toString().padStart(2, '0');
+                const dateStr = new Date(time * 1000).toLocaleString(); // Simple local format
+
+                // components.push(`<span>${dateStr}</span>`); // Optional: Date in legend? TV puts it on axis.
+
+                if (candle) {
+                    const color = candle.close >= candle.open ? '#089981' : '#f23645';
+                    components.push(`<span style="color:${color}">O: ${formatPrice(candle.open)}  H: ${formatPrice(candle.high)}  L: ${formatPrice(candle.low)}  C: ${formatPrice(candle.close)}</span>`);
+                }
+
+                if (equity) {
+                    // Handle both TV object (value) and raw object (value)
+                    const val = equity.value !== undefined ? equity.value : equity;
+                    // We need original value if normalized
+                    // But wait, param.seriesData returns the Re-based value if using setData(normalized).
+                    // We attached 'original' to the data points.
+                    // TV 'seriesData' returns the original data object passed to setData! 
+                    // So 'equity' object should have '.original' if we passed it.
+
+                    const displayVal = (equity.original !== undefined) ? equity.original : (val / scaleFactor);
+                    components.push(`<span style="color:#2962FF">Eq: ${formatPrice(displayVal)}</span>`);
+                }
+
+                if (volume) {
+                    const val = volume.value !== undefined ? volume.value : volume;
+                    components.push(`Vol: ${formatVol(val)}`);
+                }
+
+                legend.innerHTML = components.join(' &nbsp; | &nbsp; ');
+            }
 
             chart.timeScale().fitContent();
 

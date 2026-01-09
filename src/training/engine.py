@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import optuna
+import warnings
+from optuna.exceptions import ExperimentalWarning
 
 from config.env import load_env
 from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
@@ -24,6 +26,11 @@ from utils.symbols import canonicalize_symbol
 from utils.formatting import format_metrics
 from persistence.param_store import save_strategy_params
 from persistence.trade_store import save_trades, prune_strategy_trades, prune_strategy_metrics
+
+
+# Suppress Optuna experimental warnings (multivariate, group)
+warnings.filterwarnings("ignore", category=ExperimentalWarning)
+
 
 LOGGER = logging.getLogger(__name__)
 

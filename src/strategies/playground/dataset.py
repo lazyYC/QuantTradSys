@@ -24,7 +24,17 @@ def build_training_dataset(
     df = features.merge(labels, on="timestamp", how="inner", suffixes=("", "_label"))
     df = df.dropna(subset=["future_short_return", "future_long_return"])
     df = df.sort_values("timestamp").reset_index(drop=True)
+    # Compute balanced sample weights
     df[SAMPLE_WEIGHT_COLUMN] = 1.0
+    if not df.empty and TARGET_COLUMN in df.columns:
+        counts = df[TARGET_COLUMN].value_counts()
+        total = len(df)
+        n_classes = len(counts)
+        if n_classes > 0:
+            for cls, count in counts.items():
+                if count > 0:
+                    weight = total / (n_classes * count)
+                    df.loc[df[TARGET_COLUMN] == cls, SAMPLE_WEIGHT_COLUMN] = weight
     if min_abs_future_return and min_abs_future_return > 0:
         mask = df["future_long_return"].abs() >= float(min_abs_future_return)
         df = df[mask].reset_index(drop=True)

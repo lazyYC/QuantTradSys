@@ -420,7 +420,73 @@ def build_trade_overview_figure(
     return fig
 
 
+def build_scatter_figure(
+    trades: pd.DataFrame, *, title: str | None = None
+) -> Optional[go.Figure]:
+    """Scatter plot: Holding Time (x) vs Return (y)."""
+
+    if trades is None or trades.empty:
+        return None
+
+    df = trades.copy()
+    if "holding_mins" not in df.columns or "return" not in df.columns:
+        return None
+    
+    # Ensure numeric
+    df["holding_mins"] = pd.to_numeric(df["holding_mins"], errors="coerce")
+    df["return"] = pd.to_numeric(df["return"], errors="coerce")
+    df = df.dropna(subset=["holding_mins", "return"])
+    
+    if df.empty:
+        return None
+    
+    fig = go.Figure()
+    
+    # Separate by Side for coloring
+    for side, color in [("LONG", COLOR_LONG), ("SHORT", COLOR_SHORT)]:
+        subset = df[df["side"] == side]
+        if subset.empty:
+            continue
+            
+        fig.add_trace(
+            go.Scatter(
+                x=subset["holding_mins"],
+                y=subset["return"],
+                mode="markers",
+                name=side,
+                marker=dict(
+                    color=color,
+                    size=8,
+                    line=dict(width=1, color="#1f2937"),
+                    opacity=0.8
+                ),
+                text=subset["exit_reason"],
+                hovertemplate=(
+                    "Return: %{y:.4f}<br>"
+                    "Hold: %{x:.1f}m<br>"
+                    "Reason: %{text}<extra></extra>"
+                )
+            )
+        )
+        
+    fig.update_layout(
+        title=title,
+        xaxis_title="Holding Time (Minutes)",
+        yaxis_title="Return",
+        template="plotly_white",
+        hovermode="closest",
+        margin=dict(t=40, b=40, l=40, r=40),
+        height=400,
+    )
+    
+    # Add zero line
+    fig.add_hline(y=0, line_color="#9ca3af", line_width=1, line_dash="dash")
+    
+    return fig
+
+
 __all__ = [
     "build_candlestick_figure",
     "build_trade_overview_figure",
+    "build_scatter_figure",
 ]

@@ -204,15 +204,25 @@ class PlaygroundStrategy(BaseStrategy):
         return {**ind_params.as_dict(), **model_params.as_dict()}
 
     def _parse_indicator_params(self, params: Dict[str, Any]) -> StarIndicatorParams:
+        # Check for nested indicator params
+        source = params.copy()
+        if "indicator" in params and isinstance(params["indicator"], dict):
+            source.update(params["indicator"])
+            
         # Filter keys that belong to StarIndicatorParams
         valid_keys = StarIndicatorParams.__annotations__.keys()
-        filtered = {k: v for k, v in params.items() if k in valid_keys}
+        filtered = {k: v for k, v in source.items() if k in valid_keys}
         return StarIndicatorParams(**filtered)
 
     def _parse_model_params(self, params: Dict[str, Any]) -> StarModelParams:
+        # Check for nested model params
+        source = params.copy()
+        if "model" in params and isinstance(params["model"], dict):
+            source.update(params["model"])
+            
         # Filter keys that belong to StarModelParams
         valid_keys = StarModelParams.__annotations__.keys()
-        filtered = {k: v for k, v in params.items() if k in valid_keys}
+        filtered = {k: v for k, v in source.items() if k in valid_keys}
         return StarModelParams(**filtered)
 
     def backtest(
@@ -252,6 +262,6 @@ class PlaygroundStrategy(BaseStrategy):
             feature_stats=feature_stats,
             transaction_cost=params.get("transaction_cost", 0.001),
             stop_loss_pct=params.get("stop_loss_pct", 0.005),
-            use_vectorized_metrics=True, # Consistent with optimization
+            use_vectorized_metrics=False, # Report needs detailed trades
             core_start=core_start,
         )

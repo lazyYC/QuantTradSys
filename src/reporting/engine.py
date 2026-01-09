@@ -25,7 +25,7 @@ from reporting.tables import (
     create_top_trades_table,
     create_trade_distribution_table,
 )
-from reporting.plotting import build_candlestick_figure, build_trade_overview_figure
+from reporting.plotting import build_candlestick_figure, build_trade_overview_figure, build_scatter_figure
 
 LOGGER = logging.getLogger(__name__)
 
@@ -272,10 +272,13 @@ class ReportEngine:
             metrics_html = m_df.to_html(classes="data-table", index=False, border=0, float_format=lambda x: f"{x:.4f}")
             
         dist_html = ""
+        analysis_html = ""
+        trades_html = ""
+
         if not self.ctx.trades_df.empty:
-            # Simple aggregations
-            # Let's create a distribution summary similar to the old table
-            t_df = self.ctx.trades_df
+            t_df = self.ctx.trades_df.copy()
+            
+            # --- Distribution ---
             dist_data = {
                 "Total Trades": len(t_df),
                 "Longs": len(t_df[t_df["side"] == "LONG"]),
@@ -283,11 +286,68 @@ class ReportEngine:
                 "Win Rate": f"{(len(t_df[t_df['return'] > 0]) / len(t_df) * 100):.1f}%" if len(t_df) > 0 else "0%",
                 "Avg Return": f"{t_df['return'].mean():.4f}",
             }
+            if "holding_mins" in t_df.columns:
+                hold_mins = pd.to_numeric(t_df["holding_mins"], errors='coerce').fillna(0)
+                dist_data["Holding Avg (m)"] = f"{hold_mins.mean():.1f}"
+                dist_data["Holding Median (m)"] = f"{hold_mins.median():.1f}"
+                dist_data["Holding Max (m)"] = f"{hold_mins.max():.1f}"
+            
             dist_df = pd.DataFrame([dist_data])
-             # Transpose for layout
             dist_df = dist_df.T.reset_index()
             dist_df.columns = ["Stat", "Value"]
             dist_html = dist_df.to_html(classes="data-table", index=False, border=0)
+
+            # --- Analysis (Correlation) ---
+            if "holding_mins" in t_df.columns:
+                t_df["return_numeric"] = pd.to_numeric(t_df["return"], errors='coerce').fillna(0)
+                t_df["hold_numeric"] = pd.to_numeric(t_df["holding_mins"], errors='coerce').fillna(0)
+                
+                corr = t_df["hold_numeric"].corr(t_df["return_numeric"])
+                
+                # Check safe indexing
+                long_mask = t_df["side"] == "LONG"
+                short_mask = t_df["side"] == "SHORT"
+                
+                l_corr = t_df.loc[long_mask, "hold_numeric"].corr(t_df.loc[long_mask, "return_numeric"]) if long_mask.any() else 0.0
+                s_corr = t_df.loc[short_mask, "hold_numeric"].corr(t_df.loc[short_mask, "return_numeric"]) if short_mask.any() else 0.0
+                
+                analysis_data = {
+                    "Corr (Time vs Return) All": f"{corr:.4f}",
+                    "Corr (Time vs Return) Long": f"{l_corr:.4f}",
+                    "Corr (Time vs Return) Short": f"{s_corr:.4f}",
+                }
+                analysis_df = pd.DataFrame([analysis_data]).T.reset_index()
+                analysis_df.columns = ["Metric", "Value"]
+                analysis_html = analysis_df.to_html(classes="data-table", index=False, border=0)
+                
+                # Add Scatter Plot
+                scatter_fig = build_scatter_figure(t_df, title="Holding Time vs Return")
+                if scatter_fig:
+                    scatter_html = scatter_fig.to_html(full_html=False, include_plotlyjs='cdn')
+                    analysis_html += f"<div style='margin-top: 20px;'>{scatter_html}</div>"
+
+            # --- Full Trade List ---
+            # Sort by time
+            t_df = t_df.sort_values("entry_time", ascending=False)
+            
+            # Format columns
+            view_cols = ["entry_time", "side", "entry_price", "exit_price", "return", "holding_mins", "exit_reason"]
+            # Ensure columns exist
+            view_cols = [c for c in view_cols if c in t_df.columns]
+            
+            view_df = t_df[view_cols].copy()
+            if "entry_time" in view_df.columns:
+                view_df["entry_time"] = pd.to_datetime(view_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
+            if "return" in view_df.columns:
+                view_df["return"] = view_df["return"].map(lambda x: f"{float(x):.4f}" if pd.notna(x) else "-")
+            if "holding_mins" in view_df.columns:
+                view_df["holding_mins"] = view_df["holding_mins"].map(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
+            if "entry_price" in view_df.columns:
+                view_df["entry_price"] = view_df["entry_price"].map(lambda x: f"{float(x):.2f}" if pd.notna(x) else "-")
+            if "exit_price" in view_df.columns:
+                view_df["exit_price"] = view_df["exit_price"].map(lambda x: f"{float(x):.2f}" if pd.notna(x) else "-")
+
+            trades_html = view_df.to_html(classes="data-table", index=False, border=0)
         
         # 5. Read Template and Inject
         template_path = Path(__file__).parent / "templates" / "tradingview_report.html"
@@ -310,6 +370,8 @@ class ReportEngine:
         
         html_content = html_content.replace("/*INJECT_METRICS*/", metrics_html)
         html_content = html_content.replace("/*INJECT_DISTRIBUTION*/", dist_html)
+        html_content = html_content.replace("/*INJECT_ANALYSIS*/", analysis_html)
+        html_content = html_content.replace("/*INJECT_TRADELIST*/", trades_html)
         
         # 6. Write Output
         self.ctx.output_path.parent.mkdir(parents=True, exist_ok=True)

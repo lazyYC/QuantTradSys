@@ -451,20 +451,15 @@ def suggest_indicator_params(
         volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.55, 0.8, step=0.05),
     )
     
-    if future_window_choices:
-        params["future_window"] = trial.suggest_categorical(
-            "future_window", sorted(set(int(x) for x in future_window_choices))
-        )
-        params["future_return_threshold"] = trial.suggest_float(
-            "future_return_threshold", 0.002, 0.01, step=0.001
-        )
-    else:
-        # Defaults for when not optimizing target (these will be overwritten by fixed config usually)
-        # But StarIndicatorParams requires them.
-        # We can put dummy values here, as they should be overridden or ignored if we are using fixed targets.
-        # However, StarIndicatorParams validation might require them.
-        params["future_window"] = 5
-        params["future_return_threshold"] = 0.005
+    # Optimize Target Parameters
+    # future_window: 1h to 4h (12 to 48 bars of 5m)
+    params["future_window"] = trial.suggest_int("future_window", 12, 60, step=12)
+    
+    # future_return_threshold: 0.1% to 0.5% (Relaxed from 0.01)
+    # Since we use Dynamic Target, this is the MINIMUM distance to consider.
+    params["future_return_threshold"] = trial.suggest_float(
+        "future_return_threshold", 0.005, 0.01, step=0.001
+    )
 
     # Fixed Parameters for Momentum/Volatility
     # We inject them here so they are carried over to the engine's params
@@ -493,5 +488,5 @@ def suggest_model_params(trial: Trial) -> StarModelParams:
         lambda_l1=trial.suggest_float("lambda_l1", 0.0, 2.0, step=0.1),
         lambda_l2=trial.suggest_float("lambda_l2", 0.0, 2.0, step=0.1),
         bagging_freq=trial.suggest_int("bagging_freq", 1, 5),
-        decision_threshold=trial.suggest_float("decision_threshold", 0.001, 0.006, step=0.0005),
+        decision_threshold=trial.suggest_float("decision_threshold", 0.0001, 0.003, step=0.0001),
     )
