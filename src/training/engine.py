@@ -328,7 +328,7 @@ class TrainingEngine:
 
             # Prepend Warmup Data
             start_ts = ds_data["timestamp"].min()
-            warmup_period = pd.Timedelta(days=60) # Conservative warmup
+            warmup_period = pd.Timedelta(days=5) # Sufficient for 300-500 bars at 5m/15m
             cutoff = start_ts - warmup_period
             
             # Slice from full history

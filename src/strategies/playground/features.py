@@ -194,6 +194,45 @@ class StarFeatureCache:
         # Expansion/Contraction
         frame["bb_width_delta"] = (bb_width - bb_width.shift(1)) / bb_width.shift(1).replace(0.0, np.nan)
         
+        # 8. Support/Resistance Features
+        # pos_in_range_{k}: Position within the high-low range of last k bars
+        # range_dist_{k}: Range width relative to close (Volatility/Compression)
+        # touch_count_{k}: How many times price touched near the extremes
+        
+        sr_windows = [12, 36, 72, 144, 288] # 1H, 3H, 6H, 12H, 24H
+        
+        for k in sr_windows:
+            roll_high = high.rolling(window=k, min_periods=k).max()
+            roll_low = low.rolling(window=k, min_periods=k).min()
+            
+            # 8.1 Position in Range (0.0=Low, 1.0=High)
+            frame[f"pos_in_range_{k}"] = (close - roll_low) / (roll_high - roll_low).replace(0.0, np.nan)
+            
+            # 8.2 Range Compression/Expansion (Width %)
+            # High value = Expanded, Low value = Compressed
+            frame[f"range_dist_{k}"] = (roll_high - roll_low) / close.replace(0.0, np.nan)
+        
+        # 8.3 Touch Count (Test of Support/Resistance)
+        # Count how many lows are within 0.2% of the rolling min (Support Tests)
+        # Count how many highs are within 0.2% of the rolling max (Resistance Tests)
+        # For touch_count, we usually look at a meaningful window like 72 (6H) or 288 (24H)
+        # Doing it for 72 only to save compute
+        touch_window = 72
+        threshold_pct = 0.002
+        
+        roll_min_72 = low.rolling(window=touch_window, min_periods=touch_window).min()
+        roll_max_72 = high.rolling(window=touch_window, min_periods=touch_window).max()
+        
+        # Boolean series: Is this bar's low near the 72-period low?
+        # Note: We need to compare current low vs existing roll_min (which includes current).
+        # A touch is defined as: low <= roll_min * (1 + thresh)
+        low_touch = (low <= roll_min_72 * (1 + threshold_pct)).astype(float)
+        high_touch = (high >= roll_max_72 * (1 - threshold_pct)).astype(float)
+        
+        # Sum touches in the window
+        frame[f"support_touch_count_{touch_window}"] = low_touch.rolling(window=touch_window).sum()
+        frame[f"resistance_touch_count_{touch_window}"] = high_touch.rolling(window=touch_window).sum()
+
         # --- NEW FEATURES END ---
 
         # --- NEW FEATURES END ---
@@ -217,7 +256,10 @@ class StarFeatureCache:
         frame["shadow_diff"] = frame["upper_shadow_ratio"] - frame["lower_shadow_ratio"]
 
         frame = frame.drop(
-            columns=["rolling_high", "rolling_low", "atr", "volume"],
+            columns=[
+                "rolling_high", "rolling_low", "atr", "volume", 
+                "log_return_1", "log_return_5"
+            ],
             errors="ignore",
         )
         frame = frame.dropna().reset_index(drop=True)

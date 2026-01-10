@@ -172,7 +172,7 @@ class ReportEngine:
         """Load OHLCV data with warmup buffering."""
         # Load Candles
         # We need warmup data for indicators (approx 60 days to be safe for 30-day patterns/windows)
-        warmup_days = 60
+        warmup_days = 5 # Sufficient for 300-500 bars at 5m/15m
         fetch_start = self.ctx.start_ts - pd.Timedelta(days=warmup_days) if self.ctx.start_ts else None
         
         self.ctx.candles = self.market_store.load_candles(
