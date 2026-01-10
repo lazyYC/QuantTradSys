@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--title", help="Report Title")
     parser.add_argument("--start", help="Start Date (ISO)")
     parser.add_argument("--end", help="End Date (ISO)")
+    parser.add_argument("--stop-loss-pct", help="Override Stop Loss % (e.g. 0.005 or 'false')", default=None)
     return parser.parse_args()
 
 

@@ -42,6 +42,9 @@ class ReportContext:
     # Time Boundaries
     start_ts: Optional[pd.Timestamp] = None
     end_ts: Optional[pd.Timestamp] = None
+    
+    # Override
+    stop_loss_arg: Optional[str] = None
 
     # Inferred/Loaded Metadata
     symbol: str = ""
@@ -78,6 +81,7 @@ class ReportEngine:
             title=args.title,
             start_ts=start_ts,
             end_ts=end_ts,
+            stop_loss_arg=args.stop_loss_pct,
         )
         return cls(ctx)
 
@@ -121,6 +125,48 @@ class ReportEngine:
         if self.ctx.start_ts and self.ctx.end_ts and self.ctx.start_ts > self.ctx.end_ts:
             LOGGER.error("Start time must be before end time.")
             sys.exit(1)
+
+        # Resolve Stop Loss Logic
+        self._resolve_stop_loss()
+
+    def _resolve_stop_loss(self) -> None:
+        """Resolve stop loss percentage based on override or params."""
+        override = self.ctx.stop_loss_arg
+        final_sl = 0.005 # Fallback default
+        
+        # 1. Override Check
+        if override is not None:
+            if str(override).lower() == "false":
+                final_sl = 0.0
+                LOGGER.info("Stop Loss: DISABLED (Override=False)")
+            else:
+                try:
+                    final_sl = float(override)
+                    LOGGER.info(f"Stop Loss: OVERRIDE to {final_sl:.4f}")
+                except ValueError:
+                    LOGGER.warning(f"Invalid stop-loss arg '{override}', ignoring.")
+            
+            # Inject into params immediately
+            self.ctx.params["stop_loss_pct"] = final_sl
+            return
+
+        # 2. Smart Default (Future Return Threshold * 0.5)
+        indicator_params = self.ctx.params.get("indicator", {})
+        thresh = indicator_params.get("future_return_threshold")
+        if not thresh:
+            thresh = self.ctx.params.get("future_return_threshold", 0.0)
+            
+        if thresh:
+            try:
+                val = float(thresh)
+                if val > 0:
+                    final_sl = val * 0.5
+                    LOGGER.info(f"Stop Loss: Inferred from threshold ({val:.4f} * 0.5 = {final_sl:.4f})")
+            except (ValueError, TypeError):
+                pass
+                
+        self.ctx.params["stop_loss_pct"] = final_sl
+
 
     def _prepare_data(self) -> None:
         """Load OHLCV data with warmup buffering."""

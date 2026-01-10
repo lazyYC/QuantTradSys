@@ -259,38 +259,40 @@ class TrainingEngine:
             model_path_str = str(result.model_path) if hasattr(result, "model_path") else None
             
             # Save Params
-            save_strategy_params(
-                strategy=self.ctx.strategy_name,
-                study=self.ctx.study_name,
-                symbol=self.ctx.symbol,
-                timeframe=self.ctx.timeframe,
-                params=self.ctx.best_params,
-                metrics=format_metrics(metrics_to_save),
-                model_path=model_path_str,
-                stop_loss_pct=self.ctx.stop_loss_pct,
-                transaction_cost=self.ctx.transaction_cost,
-            )
+            if not self.ctx.dry_run:
+                save_strategy_params(
+                    strategy=self.ctx.strategy_name,
+                    study=self.ctx.study_name,
+                    symbol=self.ctx.symbol,
+                    timeframe=self.ctx.timeframe,
+                    params=self.ctx.best_params,
+                    metrics=format_metrics(metrics_to_save),
+                    model_path=model_path_str,
+                    stop_loss_pct=self.ctx.stop_loss_pct,
+                    transaction_cost=self.ctx.transaction_cost,
+                )
             
             # Run Backtest on Splits
             self._run_backtest_on_splits(run_id, model_path_str)
             
             # Prune old trades
-            prune_strategy_trades(
-                strategy=self.ctx.strategy_name,
-                study=self.ctx.study_name,
-                symbol=self.ctx.symbol,
-                timeframe=self.ctx.timeframe,
-                keep_run_id=run_id,
-            )
-            prune_strategy_metrics(
-                strategy=self.ctx.strategy_name,
-                study=self.ctx.study_name,
-                symbol=self.ctx.symbol,
-                timeframe=self.ctx.timeframe,
-                keep_run_id=run_id,
-            )
+            if not self.ctx.dry_run:
+                prune_strategy_trades(
+                    strategy=self.ctx.strategy_name,
+                    study=self.ctx.study_name,
+                    symbol=self.ctx.symbol,
+                    timeframe=self.ctx.timeframe,
+                    keep_run_id=run_id,
+                )
+                prune_strategy_metrics(
+                    strategy=self.ctx.strategy_name,
+                    study=self.ctx.study_name,
+                    symbol=self.ctx.symbol,
+                    timeframe=self.ctx.timeframe,
+                    keep_run_id=run_id,
+                )
             
-            LOGGER.info(f"Results saved to Database (PostgreSQL)")
+            LOGGER.info(f"Results saved to Database (PostgreSQL) [Dry Run: {self.ctx.dry_run}]")
 
         except Exception as e:
             LOGGER.exception("Failed to persist results")
@@ -349,13 +351,14 @@ class TrainingEngine:
             )
             
             if bt_result and hasattr(bt_result, "trades") and not bt_result.trades.empty:
-                save_trades(
-                    strategy=self.ctx.strategy_name,
-                    study=self.ctx.study_name,
-                    dataset=ds_name,
-                    symbol=self.ctx.symbol,
-                    timeframe=self.ctx.timeframe,
-                    trades=bt_result.trades,
-                    metrics=format_metrics(bt_result.metrics),
-                    run_id=run_id,
-                )
+                if not self.ctx.dry_run:
+                    save_trades(
+                        strategy=self.ctx.strategy_name,
+                        study=self.ctx.study_name,
+                        dataset=ds_name,
+                        symbol=self.ctx.symbol,
+                        timeframe=self.ctx.timeframe,
+                        trades=bt_result.trades,
+                        metrics=format_metrics(bt_result.metrics),
+                        run_id=run_id,
+                    )
