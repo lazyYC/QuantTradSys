@@ -64,35 +64,38 @@ def build_label_frame(
     labels = np.zeros(len(close), dtype=int)
 
     # --- Long Logic (Price < MA) ---
-    # 1. 位置判斷: 收盤價在均線下，且乖離夠大
     long_mask = (dist < 0) & valid_mask
     
-    # 2. 目標價格
     long_tp = close + dist.abs() * profit_ratio
     long_sl = close * (1.0 - stop_loss_pct)
-
-    # 3. Triple Barrier Check
-    # 條件: 未來 N 根內，最高價觸及止盈
-    # 且: 最低價未觸及止損 (這裡用保守估計：整個窗口的最低價都必須高於止損)
-    # 這比 "先碰止盈還是先碰止損" 更嚴格，但在 Vectorized 下是安全的假設。
+    
+    # Success: Reversion (Targets TP, avoids SL)
     long_success = (future_max_high >= long_tp) & (future_min_low > long_sl)
     
+    # Failure: Breakdown (Hits SL)
+    # If support breaks, it was a Short opportunity (Trend Continuation)
+    long_breakdown = (future_min_low <= long_sl)
+    
     labels[long_mask & long_success] = 1
+    # Overwrite breakdown as -1 (Short Signal), but only if it wasn't a success (though success check handles it)
+    # Note: If volatile, it might hit both. Our conservative success check (future_min_low > long_sl) ensures mutual exclusivity.
+    labels[long_mask & long_breakdown] = -1
 
     # --- Short Logic (Price > MA) ---
-    # 1. 位置判斷: 收盤價在均線上，且乖離夠大
     short_mask = (dist > 0) & valid_mask
     
-    # 2. 目標價格
     short_tp = close - dist.abs() * profit_ratio
     short_sl = close * (1.0 + stop_loss_pct)
-
-    # 3. Triple Barrier Check
-    # 條件: 未來 N 根內，最低價觸及止盈
-    # 且: 最高價未觸及止損
+    
+    # Success: Reversion (Targets TP, avoids SL)
     short_success = (future_min_low <= short_tp) & (future_max_high < short_sl)
+    
+    # Failure: Breakout (Hits SL)
+    # If resistance breaks, it was a Long opportunity
+    short_breakout = (future_max_high >= short_sl)
 
     labels[short_mask & short_success] = -1
+    labels[short_mask & short_breakout] = 1
 
     # --- Auxiliary Columns ---
     # 為了保持 dataset 結構完整性，保留 future_close_return 計算
