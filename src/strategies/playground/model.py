@@ -298,111 +298,123 @@ def _simulate_trades(
     records: List[Dict[str, object]] = []
     min_hold = max(int(min_hold_bars), 0)
 
+    records = []
+    open_trades: List[Dict] = []
+    MAX_STACKS = 5
+    
+    # 預先計算需要的欄位 index 以加速
+    # Trend MA check
+    has_trend_ma = "trend_ma" in frame.columns
+    has_high = "high" in frame.columns
+    has_low = "low" in frame.columns
+
     for idx, row in enumerate(frame.itertuples(index=False), start=0):
         ts: pd.Timestamp = row.timestamp
         close_price = float(row.close)
-        high_price = float(row.high) if hasattr(row, "high") else close_price
-        low_price = float(row.low) if hasattr(row, "low") else close_price
-        trend_ma_val = float(row.trend_ma) if hasattr(row, "trend_ma") else close_price
+        high_price = float(row.high) if has_high else close_price
+        low_price = float(row.low) if has_low else close_price
+        trend_ma_val = float(row.trend_ma) if has_trend_ma else close_price
         
         predicted_class = float(row.predicted_class_sim)
         expected_ret = float(row.expected_return_sim)
 
-        if open_trade is not None:
-            side = open_trade["side"]
-            exit_by_signal = False
+        # 1. Manage Active Trades (Check Exits)
+        active_trades = []
+        for trade in open_trades:
+            side = trade["side"]
             exit_by_target = False
             stop_triggered = False
+            time_exit = False
             
-            # 1. Stop Loss Check
+            # A. Stop Loss Check
             if stop_loss_pct is not None and stop_loss_pct > 0.0:
-                entry_price = open_trade["entry_price"]
+                entry_price = trade["entry_price"]
                 if side == "LONG":
-                    # Conservative: Use LOW for stop loss
                     unrealized = (low_price - entry_price) / entry_price
                 else:
-                    # Conservative: Use HIGH for stop loss
                     unrealized = (entry_price - high_price) / entry_price
                     
                 if unrealized <= -stop_loss_pct:
                     stop_triggered = True
 
-            # 2. Target Exit Check (Method 2)
+            # B. Target Exit Check (Target Locked at Entry)
+            current_close_for_exit = close_price
             if not stop_triggered:
-                target_p = open_trade.get("target_price")
+                target_p = trade.get("target_price")
                 if target_p is not None:
                     if side == "LONG":
-                        # If High touched target
                         if high_price >= target_p:
                             exit_by_target = True
-                            # Cap exit price at target (or close? Target is safer assumption)
-                            # But if gap up? Let's use max(target, close) or just target?
-                            # Conservative: use target.
-                            close_price = target_p 
+                            current_close_for_exit = target_p 
                     else:
-                        # If Low touched target
                         if low_price <= target_p:
                             exit_by_target = True
-                            close_price = target_p
+                            current_close_for_exit = target_p
 
-            # 3. Reversal Signal Check (Safety Valve)
-            # Only exit if signal FLIPS to opposite. Neutral (0) is ignored.
-            can_exit_by_signal = idx >= open_trade["min_exit_idx"]
-            if not stop_triggered and not exit_by_target and can_exit_by_signal:
-                if side == "LONG":
-                    exit_by_signal = (predicted_class == -1.0)
-                elif side == "SHORT":
-                    exit_by_signal = (predicted_class == 1.0)
+            # C. Time Exit / Min Hold
+            # Note: runtime.py uses strict min_exit_timestamp. 
+            # model.py legacy used min_hold_bars + signal reversal. 
+            # Here we enforce "Min Hold" if defined, but since we removed Signal Reversal,
+            # we need a condition to exit if alpha is gone?
+            # Actually, without Signal Reversal, we behave like "Fixed Hold" or "Target/Stop Only".
+            # The User's "Vectorized" concept usually implies "Fixed Interval" or "Signal Driven".
+            # runtime.py has `min_exit_ts`. If reached, it exits.
+            # So we should enforce `min_exit_idx`.
+            if idx >= trade["min_exit_idx"]:
+                 time_exit = True
 
-            if stop_triggered or exit_by_target or exit_by_signal:
-                entry_price = open_trade["entry_price"]
+            # D. Execute Exit
+            if stop_triggered or exit_by_target or time_exit:
+                entry_price = trade["entry_price"]
                 if side == "LONG":
-                    ret = (close_price - entry_price) / entry_price
+                    ret = (current_close_for_exit - entry_price) / entry_price
                 else:
-                    ret = (entry_price - close_price) / entry_price
+                    ret = (entry_price - current_close_for_exit) / entry_price
                     
                 if transaction_cost:
                     ret -= transaction_cost
                     
                 holding_minutes = max(
-                    (ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0
+                    (ts - trade["entry_time"]).total_seconds() / 60.0, 0.0
                 )
                 
-                reason = "signal_reversal"
+                reason = "time_exit"
                 if stop_triggered: reason = "stop_loss"
                 elif exit_by_target: reason = "target_reached"
                 
                 records.append(
                     {
                         "side": side,
-                        "entry_time": open_trade["entry_time"],
+                        "entry_time": trade["entry_time"],
                         "exit_time": ts,
                         "entry_price": entry_price,
-                        "exit_price": close_price,
+                        "exit_price": current_close_for_exit,
                         "return": ret,
                         "holding_mins": holding_minutes,
-                        "entry_expected_return": open_trade["entry_expected_return"],
+                        "entry_expected_return": trade["entry_expected_return"],
                         "exit_expected_return": expected_ret,
-                        "entry_class": open_trade["entry_class"],
+                        "entry_class": trade["entry_class"],
                         "exit_class": predicted_class,
                         "exit_reason": reason,
-                        "entry_zscore": open_trade.get(
-                            "entry_zscore", open_trade["entry_expected_return"]
-                        ),
+                        "entry_zscore": trade.get("entry_zscore", 0.0),
                         "exit_zscore": expected_ret,
                     }
                 )
-                open_trade = None
-                if stop_triggered or exit_by_target:
-                    continue
+                # Trade closed, do not re-add to active_trades
+            else:
+                active_trades.append(trade)
+        
+        open_trades = active_trades
 
-        if open_trade is None and expected_ret >= threshold:
+        # 2. Check New Entries (Pyramiding)
+        if len(open_trades) < MAX_STACKS and expected_ret >= threshold:
             # Calculate Target Price
             dist = abs(close_price - trend_ma_val)
             target_dist = dist * profit_ratio
             
+            new_trade = None
             if predicted_class == 1.0:
-                open_trade = {
+                 new_trade = {
                     "side": "LONG",
                     "entry_time": ts,
                     "entry_price": close_price,
@@ -414,7 +426,7 @@ def _simulate_trades(
                     "entry_zscore": expected_ret,
                 }
             elif predicted_class == -1.0:
-                open_trade = {
+                new_trade = {
                     "side": "SHORT",
                     "entry_time": ts,
                     "entry_price": close_price,
@@ -425,43 +437,47 @@ def _simulate_trades(
                     "entry_class": predicted_class,
                     "entry_zscore": expected_ret,
                 }
+            
+            if new_trade:
+                open_trades.append(new_trade)
 
-
-    if open_trade is not None:
-        # 在資料結尾強制平倉，避免遺留持倉
+    # 3. Clean up remaining trades at end of data
+    if open_trades:
         last_row = frame.iloc[-1]
         last_ts: pd.Timestamp = last_row["timestamp"]
         last_price = float(last_row["close"])
-        side = open_trade["side"]
-        if side == "LONG":
-            ret = (last_price - open_trade["entry_price"]) / open_trade["entry_price"]
-        else:
-            ret = (open_trade["entry_price"] - last_price) / open_trade["entry_price"]
-        if transaction_cost:
-            ret -= transaction_cost
-        holding_minutes = max(
-            (last_ts - open_trade["entry_time"]).total_seconds() / 60.0, 0.0
-        )
-        records.append(
-            {
-                "side": side,
-                "entry_time": open_trade["entry_time"],
-                "exit_time": last_ts,
-                "entry_price": open_trade["entry_price"],
-                "exit_price": last_price,
-                "return": ret,
-                "holding_mins": holding_minutes,
-                "entry_expected_return": open_trade["entry_expected_return"],
-                "exit_expected_return": float(last_row["expected_return_sim"]),
-                "entry_class": open_trade["entry_class"],
-                "exit_class": float(last_row["predicted_class_sim"]),
-                "exit_reason": "end_of_data",
-                "entry_zscore": open_trade.get(
-                    "entry_zscore", open_trade["entry_expected_return"]
-                ),
-                "exit_zscore": float(last_row["expected_return_sim"]),
-            }
-        )
+        
+        for trade in open_trades:
+            side = trade["side"]
+            if side == "LONG":
+                ret = (last_price - trade["entry_price"]) / trade["entry_price"]
+            else:
+                ret = (trade["entry_price"] - last_price) / trade["entry_price"]
+                
+            if transaction_cost:
+                ret -= transaction_cost
+                
+            holding_minutes = max(
+                (last_ts - trade["entry_time"]).total_seconds() / 60.0, 0.0
+            )
+            records.append(
+                {
+                    "side": side,
+                    "entry_time": trade["entry_time"],
+                    "exit_time": last_ts,
+                    "entry_price": trade["entry_price"],
+                    "exit_price": last_price,
+                    "return": ret,
+                    "holding_mins": holding_minutes,
+                    "entry_expected_return": trade["entry_expected_return"],
+                    "exit_expected_return": float(last_row["expected_return_sim"]),
+                    "entry_class": trade["entry_class"],
+                    "exit_class": float(last_row["predicted_class_sim"]),
+                    "exit_reason": "end_of_data",
+                    "entry_zscore": trade.get("entry_zscore", 0.0),
+                    "exit_zscore": float(last_row["expected_return_sim"]),
+                }
+            )
 
     trades = pd.DataFrame.from_records(records, columns=trade_columns)
     if trades.empty:
