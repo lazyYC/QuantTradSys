@@ -233,8 +233,11 @@ class StarFeatureCache:
         frame[f"support_touch_count_{touch_window}"] = low_touch.rolling(window=touch_window).sum()
         frame[f"resistance_touch_count_{touch_window}"] = high_touch.rolling(window=touch_window).sum()
 
-        # --- NEW FEATURES END ---
-
+        # 8.4 ADX (Trend Strength)
+        # Using 14 period usually. reusing rsi_window or atr_window? 
+        # Let's use 14 as standard.
+        frame["adx"] = _compute_adx(high, low, close, 14)
+        
         # --- NEW FEATURES END ---
 
         # Removed trade_amount (non-stationary)
@@ -333,6 +336,43 @@ def _compute_macd(series: pd.Series, fast: int, slow: int, signal: int) -> Tuple
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
+
+
+def _compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, window: int = 14) -> pd.Series:
+    """Compute ADX (Average Directional Index)."""
+    # 1. TR
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    
+    # 2. DM
+    up_move = high - high.shift(1)
+    down_move = low.shift(1) - low
+    
+    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+    plus_dm = pd.Series(plus_dm, index=high.index)
+    minus_dm = pd.Series(minus_dm, index=high.index)
+    
+    # 3. Smoothed (Wilder's)
+    # alpha = 1/window
+    # Pandas ewm(com=window-1)
+    tr_smooth = tr.ewm(com=window-1, min_periods=window, adjust=False).mean() # Actually Wilder uses Sum for first then smooth? 
+    # Standard ADX usually uses Smoothed Moving Average which is equivalent to EMA(alpha=1/N).
+    # We will use EMA directly.
+    
+    plus_di = 100 * (plus_dm.ewm(com=window-1, min_periods=window, adjust=False).mean() / tr_smooth)
+    minus_di = 100 * (minus_dm.ewm(com=window-1, min_periods=window, adjust=False).mean() / tr_smooth)
+    
+    # 4. DX
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-9)) * 100
+    
+    # 5. ADX (Smoothed DX)
+    adx = dx.ewm(com=window-1, min_periods=window, adjust=False).mean()
+    
+    return adx
 
 
 def _validate_required_columns(df: pd.DataFrame) -> None:
