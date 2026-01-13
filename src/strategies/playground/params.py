@@ -32,6 +32,20 @@ class StarIndicatorParams:
     bb_window: int = 20
     bb_std: float = 2.0
     stop_loss_pct: float = 0.005
+    
+    # New Risk Controls
+    adx_threshold: float = 30.0
+    max_open_trades: int = 25
+    max_global_drawdown_pct: float = 0.02
+    max_global_drawdown_pct: float = 0.02
+    require_candle_confirmation: bool = True
+    
+    # Grid Strategy Controls
+    grid_step_atr: float = 1.0  # Distance between layers in ATR units
+    max_grid_layers: int = 10    # Max number of pyramiding layers
+    eject_threshold: float = 0.4 # Exit if model probability drops below this
+    pure_grid: bool = False # Benchmark: Disable AI/Momentum gates if True
+
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
         "upper_shadow_min": 2,
@@ -39,6 +53,8 @@ class StarIndicatorParams:
         "volume_ratio_max": 2,
         "future_return_threshold": 3,
         "bb_std": 1,
+        "adx_threshold": 1,
+        "max_global_drawdown_pct": 3,
     }
 
     def as_dict(self, *, rounded: bool = False) -> Dict[str, float | int]:

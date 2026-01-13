@@ -470,7 +470,21 @@ def suggest_indicator_params(
         "macd_signal": 9,
         "bb_window": 20,
         "bb_std": 2.0,
+        "max_open_trades": 25,  # Increased for deep grid
+        "max_global_drawdown_pct": 0.10, # Relaxed for grid holding (10%)
+        "require_candle_confirmation": False, 
+        # Grid Params (Optimized)
     })
+    
+    # Grid Optimization
+    params["grid_step_atr"] = trial.suggest_float("grid_step_atr", 0.3, 1.5, step=0.1)
+    params["max_grid_layers"] = trial.suggest_int("max_grid_layers", 5, 20, step=5)
+    params["eject_threshold"] = trial.suggest_float("eject_threshold", 0.35, 0.48, step=0.01)
+    
+    # Optimize ADX Threshold - Stricter Range (Avoid High ADX entirely)
+    params["adx_threshold"] = trial.suggest_int("adx_threshold", 40, 60, step=5) # Grid needs room to breathe, so allow higher volatility? No, we eject on High Trend. So Threshold is "Safe Zone".
+    # User said: "Eject if ADX > 50". So safe zone is < 50.
+    # Let's optimize the Cutoff.
 
     return StarIndicatorParams(**params)
 

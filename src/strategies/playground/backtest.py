@@ -26,6 +26,7 @@ class StarBacktestResult:
     equity_curve: pd.DataFrame
     period_start: Optional[pd.Timestamp]
     period_end: Optional[pd.Timestamp]
+    benchmark_equity_curve: Optional[pd.DataFrame] = None
 
 
 def backtest_star_xgb(
@@ -252,6 +253,9 @@ def backtest_star_xgb(
         trades = trades[entry_times >= core_start_ts].reset_index(drop=True)
 
     equity_curve = _build_equity_curve(trades)
+    if not equity_curve.empty:
+        equity_curve["timestamp"] = pd.to_datetime(equity_curve["timestamp"], utc=True)
+
     if core_start_ts is not None and not equity_curve.empty:
         curve_times = pd.to_datetime(
             equity_curve["timestamp"], utc=True, errors="coerce"
@@ -371,6 +375,7 @@ def _build_signal_records(
         expected_returns,
         pred_class,
         model_params,
+        indicator_params=indicator_params,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
         min_hold_bars=min_hold_bars,
@@ -387,6 +392,9 @@ def _build_equity_curve(trades: pd.DataFrame) -> pd.DataFrame:
     if closed.empty:
         return pd.DataFrame(columns=["timestamp", "equity"])
 
+    # Ensure UTC for sorting to avoid mix-tz comparison errors
+    if "exit_time" in closed.columns:
+        closed["exit_time"] = pd.to_datetime(closed["exit_time"], utc=True)
     closed = closed.sort_values("exit_time")
     returns = pd.to_numeric(closed["return"], errors="coerce").fillna(0.0)
     equity_values = (1 + returns).cumprod()

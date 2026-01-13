@@ -250,7 +250,7 @@ class PlaygroundStrategy(BaseStrategy):
         feature_columns = params.get("feature_columns")
         feature_stats = params.get("feature_stats")
         
-        return backtest_star_xgb(
+        main_result = backtest_star_xgb(
             raw_data,
             indicator_params,
             model_params,
@@ -265,3 +265,36 @@ class PlaygroundStrategy(BaseStrategy):
             use_vectorized_metrics=False, # Report needs detailed trades
             core_start=core_start,
         )
+
+        # --- Run Pure Grid Benchmark (if main run is not pure grid) ---
+        if not indicator_params.pure_grid:
+            bench_params = params.copy()
+            # Handle nested or flat indicator params structure
+            if "indicator" in bench_params and isinstance(bench_params["indicator"], dict):
+                bench_params["indicator"] = bench_params["indicator"].copy()
+                bench_params["indicator"]["pure_grid"] = True
+            else:
+                bench_params["pure_grid"] = True
+            
+            # Re-parse to get benchmark indicator params
+            bench_ind_params = self._parse_indicator_params(bench_params)
+            
+            bench_result = backtest_star_xgb(
+                raw_data,
+                bench_ind_params,
+                model_params,
+                model_path=model_path,
+                timeframe=params.get("timeframe", "5m"),
+                class_means=class_means,
+                class_thresholds=class_thresholds,
+                feature_columns=feature_columns,
+                feature_stats=feature_stats,
+                transaction_cost=params.get("transaction_cost", 0.001),
+                stop_loss_pct=params.get("stop_loss_pct", 0.005),
+                use_vectorized_metrics=False, # Benchmark needs equity curve for report
+                core_start=core_start,
+            )
+            main_result.benchmark_equity_curve = bench_result.equity_curve
+            
+        return main_result
+

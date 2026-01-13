@@ -41,7 +41,7 @@ def build_label_frame(
     stop_loss_pct = getattr(params, "stop_loss_pct", 0.005)
     # min_profit_threshold 使用 future_return_threshold
     min_profit_pct = params.future_return_threshold
-    profit_ratio = 0.6  # 回歸目標的 60% (Relaxed for vector-2.7)
+    profit_ratio = 0.4  # 回歸目標的 60% (Relaxed for vector-2.7)
 
     # Forward Window Calculation
     # 使用 FixedForwardWindowIndexer 來正確計算未來窗口的極值
