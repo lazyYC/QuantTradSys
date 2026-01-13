@@ -57,6 +57,7 @@ class ReportContext:
     trades_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     metrics_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     equity_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    benchmark_equity_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     
     # Internal
     sections: List[Mapping[str, object]] = field(default_factory=list)
@@ -219,6 +220,10 @@ class ReportEngine:
             self.ctx.trades_df["dataset"] = "backtest"
             
         self.ctx.metrics_df = pd.DataFrame([result.metrics])
+        
+        # Store Benchmark Equity if available
+        if hasattr(result, "benchmark_equity_curve") and result.benchmark_equity_curve is not None:
+             self.ctx.benchmark_equity_df = result.benchmark_equity_curve
 
     # ----------------------------------------------------------------
     # TradingView Logic
@@ -279,28 +284,67 @@ class ReportEngine:
                     "value": float(row["equity"])
                 })
                 
+        # Benchmark Equity
+        benchmark_data = []
+        if not self.ctx.benchmark_equity_df.empty:
+             bench_eq = self.ctx.benchmark_equity_df.copy()
+             # Ensure timestamp format
+             if "timestamp" in bench_eq.columns:
+                 bench_eq = filter_by_time(bench_eq, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
+                 bench_eq["time"] = pd.to_datetime(bench_eq["timestamp"], utc=True).astype('int64') // 10**9
+                 for _, row in bench_eq.iterrows():
+                     benchmark_data.append({
+                         "time": int(row["time"]),
+                         "value": float(row["equity"])
+                     })
+
         # Markers (Trades)
         markers = []
         if not self.ctx.trades_df.empty:
+            raw_markers = []
             for _, row in self.ctx.trades_df.iterrows():
                 # Entry
-                entry_ts = pd.to_datetime(row["entry_time"]).timestamp()
-                markers.append({
-                    "time": int(entry_ts),
+                entry_ts = int(pd.to_datetime(row["entry_time"]).timestamp())
+                raw_markers.append({
+                    "time": entry_ts,
                     "position": "belowBar" if row["side"] == "LONG" else "aboveBar",
-                    "color": "#2196F3" if row["side"] == "LONG" else "#E91E63", # Blue for Long, Pink for Short
+                    "color": "#2196F3" if row["side"] == "LONG" else "#E91E63",
                     "shape": "arrowUp" if row["side"] == "LONG" else "arrowDown",
-                    "text": str(row['entry_price'])
+                    "text": f"Entry: {row['entry_price']}",
+                    "id": f"entry_{entry_ts}" # Unique key part
                 })
                 
                 # Exit
-                exit_ts = pd.to_datetime(row["exit_time"]).timestamp()
-                markers.append({
-                    "time": int(exit_ts),
+                exit_ts = int(pd.to_datetime(row["exit_time"]).timestamp())
+                raw_markers.append({
+                    "time": exit_ts,
                     "position": "aboveBar" if row["side"] == "LONG" else "belowBar", 
-                    "color": "#FF9800", # Orange for Exit
+                    "color": "#FF9800",
                     "shape": "circle", 
-                    "text": str(row['exit_price'])
+                    "text": f"Exit: {row['exit_price']}",
+                    "id": f"exit_{exit_ts}" 
+                })
+            
+            # Group markers to prevent overlap
+            marker_map = {}
+            for m in raw_markers:
+                key = (m["time"], m["position"], m["color"], m["shape"])
+                if key not in marker_map:
+                    marker_map[key] = []
+                marker_map[key].append(m["text"])
+            
+            for (ts, pos, col, shp), texts in marker_map.items():
+                combined_text = " | ".join(texts)
+                # If too long, truncate or summarize
+                if len(texts) > 2:
+                    combined_text = f"{len(texts)} trades | " + " | ".join(texts[:2]) + "..."
+                    
+                markers.append({
+                    "time": ts,
+                    "position": pos,
+                    "color": col,
+                    "shape": shp,
+                    "text": combined_text
                 })
         
         # Sort markers by time just in case
@@ -376,14 +420,32 @@ class ReportEngine:
             # Sort by time
             t_df = t_df.sort_values("entry_time", ascending=False)
             
+            # Create Navigation Links for Times
+            # Entry Time Link
+            t_df["ts_entry"] = pd.to_datetime(t_df["entry_time"]).astype('int64') // 10**9
+            t_df["entry_time_display"] = pd.to_datetime(t_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
+            t_df["entry_time"] = t_df.apply(
+                lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_entry']})'>{row['entry_time_display']}</span>", 
+                axis=1
+            )
+            
+            # Exit Time Link
+            if "exit_time" in t_df.columns:
+                t_df["ts_exit"] = pd.to_datetime(t_df["exit_time"]).astype('int64') // 10**9
+                t_df["exit_time_display"] = pd.to_datetime(t_df["exit_time"]).dt.strftime("%Y-%m-%d %H:%M")
+                t_df["exit_time"] = t_df.apply(
+                    lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_exit']})'>{row['exit_time_display']}</span>", 
+                    axis=1
+                )
+
             # Format columns
-            view_cols = ["entry_time", "side", "entry_price", "exit_price", "return", "holding_mins", "exit_reason"]
+            view_cols = ["entry_time", "exit_time", "side", "entry_price", "exit_price", "return", "holding_mins", "exit_reason"]
             # Ensure columns exist
             view_cols = [c for c in view_cols if c in t_df.columns]
             
             view_df = t_df[view_cols].copy()
-            if "entry_time" in view_df.columns:
-                view_df["entry_time"] = pd.to_datetime(view_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
+            # Note: Dates are already formatted as HTML strings above
+            
             if "return" in view_df.columns:
                 view_df["return"] = view_df["return"].map(lambda x: f"{float(x):.4f}" if pd.notna(x) else "-")
             if "holding_mins" in view_df.columns:
@@ -393,7 +455,7 @@ class ReportEngine:
             if "exit_price" in view_df.columns:
                 view_df["exit_price"] = view_df["exit_price"].map(lambda x: f"{float(x):.2f}" if pd.notna(x) else "-")
 
-            trades_html = view_df.to_html(classes="data-table", index=False, border=0)
+            trades_html = view_df.to_html(classes="data-table", index=False, border=0, escape=False)
         
         # 5. Read Template and Inject
         template_path = Path(__file__).parent / "templates" / "tradingview_report.html"
@@ -403,22 +465,36 @@ class ReportEngine:
             
         html_content = template_path.read_text(encoding="utf-8")
         
+        # Calculate Interval Seconds for Zoom
+        interval_s = 300 # Default 5m
+        tf = self.ctx.timeframe.lower()
+        if tf.endswith('m'):
+            interval_s = int(tf[:-1]) * 60
+        elif tf.endswith('h'):
+            interval_s = int(tf[:-1]) * 3600
+        elif tf.endswith('d'):
+            interval_s = int(tf[:-1]) * 86400
+            
         # Replacements
-        title = self.ctx.title or f"{self.ctx.strategy_name} - {self.ctx.study_name}"
-        html_content = html_content.replace("/*TITLE*/", title)
-        html_content = html_content.replace("/*STRATEGY*/", self.ctx.strategy_name)
-        html_content = html_content.replace("/*STUDY*/", self.ctx.study_name)
+        replacements = {
+            "/*TITLE*/": f"Strategy Report: {self.ctx.strategy_name}",
+            "/*STRATEGY*/": self.ctx.strategy_name,
+            "/*STUDY*/": self.ctx.study_name,
+            "/*INJECT_CANDLES*/": json.dumps(candle_data),
+            "/*INJECT_VOLUME*/": json.dumps(volume_data),
+            "/*INJECT_EQUITY*/": json.dumps(equity_data),
+            "/*INJECT_BENCHMARK_EQUITY*/": json.dumps(benchmark_data),
+            "/*INJECT_MARKERS*/": json.dumps(markers),
+            "/*INJECT_METRICS*/": metrics_html,
+            "/*INJECT_DISTRIBUTION*/": dist_html,
+            "/*INJECT_ANALYSIS*/": analysis_html,
+            "/*INJECT_TRADES*/": trades_html,
+            "/*INJECT_INTERVAL*/": str(interval_s)
+        }
         
-        html_content = html_content.replace("/*INJECT_CANDLES*/", json.dumps(candle_data))
-        html_content = html_content.replace("/*INJECT_EQUITY*/", json.dumps(equity_data))
-        html_content = html_content.replace("/*INJECT_VOLUME*/", json.dumps(volume_data))
-        html_content = html_content.replace("/*INJECT_MARKERS*/", json.dumps(markers))
-        
-        html_content = html_content.replace("/*INJECT_METRICS*/", metrics_html)
-        html_content = html_content.replace("/*INJECT_DISTRIBUTION*/", dist_html)
-        html_content = html_content.replace("/*INJECT_ANALYSIS*/", analysis_html)
-        html_content = html_content.replace("/*INJECT_TRADELIST*/", trades_html)
-        
+        for key, val in replacements.items():
+            html_content = html_content.replace(key, val)
+            
         # 6. Write Output
         self.ctx.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.ctx.output_path.write_text(html_content, encoding="utf-8")
