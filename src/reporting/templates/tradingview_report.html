@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>/*TITLE*/</title>
+    <title>/*TITLE*/ (v2)</title>
     <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         body {
@@ -12,7 +12,6 @@
             margin: 0;
             padding: 0;
             background-color: #131722;
-            /* TradingView Dark Background */
             color: #d1d5db;
         }
 
@@ -69,7 +68,7 @@
             margin-right: 6px;
         }
 
-        #chart-container {
+        #tv-chart {
             width: 100%;
             height: 600px;
             border: 1px solid #2a2e39;
@@ -127,23 +126,47 @@
 
         .data-table th,
         .data-table td {
+            border: 1px solid #444;
+            padding: 8px;
             text-align: left;
-            padding: 10px 15px;
-            border-bottom: 1px solid #2a2e39;
         }
 
         .data-table th {
-            background-color: #2a2e39;
-            font-weight: 500;
-            color: #d1d4dc;
+            background-color: #333;
+            position: sticky;
+            top: 0;
         }
 
-        .data-table tr:last-child td {
-            border-bottom: none;
+        .data-table tr:nth-child(even) {
+            background-color: #262626;
         }
 
         .data-table tr:hover {
-            background-color: #2a2e39;
+            background-color: #333;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 20px;
+            padding: 10px 20px;
+            background: #252526;
+        }
+
+        h2 {
+            color: #fff;
+            margin-top: 0;
+        }
+
+        .time-link {
+            color: #4fc3f7;
+            text-decoration: none;
+            cursor: pointer;
+            border-bottom: 1px dashed #4fc3f7;
+        }
+
+        .time-link:hover {
+            color: #81d4fa;
+            border-bottom-style: solid;
         }
 
         /* Utility */
@@ -158,52 +181,59 @@
         .text-right {
             text-align: right !important;
         }
+
+        .focus-btn {
+            background-color: #2196F3;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-right: 5px;
+        }
+
+        .focus-btn:hover {
+            background-color: #1976D2;
+        }
     </style>
 </head>
 
 <body>
-    <div class="header">
-        <h1>/*TITLE*/</h1>
-        <div class="meta">/*STRATEGY*/ | /*STUDY*/</div>
-    </div>
-
-    <div id="error-display"></div>
-
     <div class="full-width-container">
-        <!-- Controls -->
-        <div class="controls">
-            <label class="control-item">
-                <input type="checkbox" id="check-markers" checked>
-                Show Trades
+        <h1>Trading Strategy Report</h1>
+        <div id="error-display"
+            style="display:none; color: #ef5350; background: #2a1010; padding: 10px; border-bottom: 1px solid #501010;">
+        </div>
+
+        <div class="control-panel">
+            <label style="display: flex; align-items: center; cursor: pointer;">
+                <input type="checkbox" id="check-equity" checked style="margin-right: 8px;"> Equity Curve
             </label>
-            <label class="control-item">
-                <input type="checkbox" id="check-labels" checked>
-                Show Price Labels
+            <label style="display: flex; align-items: center; cursor: pointer;">
+                <input type="checkbox" id="check-benchmark" checked style="margin-right: 8px;"> Pure Grid
+                (Benchmark)
+            </label>
+            <label style="display: flex; align-items: center; cursor: pointer;">
+                <input type="checkbox" id="check-markers" checked style="margin-right: 8px;"> Trades
             </label>
         </div>
 
-        <!-- Chart -->
-        <div id="chart-container">
-            <div class="legend" id="legend"></div>
+        <div id="tv-chart" class="chart-container">
+            <div id="legend" class="legend"></div>
         </div>
     </div>
 
     <div class="container">
-        <!-- Metrics -->
-        <div class="section-title">Performance Metrics</div>
+        <h2>Performance Metrics</h2>
         /*INJECT_METRICS*/
 
-        <!-- Distribution -->
-        <div class="section-title">Trade Distribution</div>
+        <h2>Trade Analysis</h2>
         /*INJECT_DISTRIBUTION*/
-
-        <!-- Analysis -->
-        <div class="section-title">Analysis</div>
         /*INJECT_ANALYSIS*/
 
-        <!-- Trade List -->
-        <div class="section-title">Trade List</div>
-        /*INJECT_TRADELIST*/
+        <h2>Trade List</h2>
+        /*INJECT_TRADES*/
     </div>
 
     <script>
@@ -211,6 +241,7 @@
             // Data Injection
             const candleData = /*INJECT_CANDLES*/;
             const equityData = /*INJECT_EQUITY*/;
+            const benchmarkData = /*INJECT_BENCHMARK_EQUITY*/;
             const allMarkers = /*INJECT_MARKERS*/; // Contains full data
             const volumeData = /*INJECT_VOLUME*/;
 
@@ -219,6 +250,7 @@
             // ------------------------------------------
             let scaleFactor = 1.0;
             let normalizedEquity = equityData;
+            let normalizedBenchmark = benchmarkData;
 
             if (candleData.length > 0 && equityData.length > 0) {
                 const startEquityObj = equityData[0];
@@ -243,18 +275,33 @@
                         value: d.value * scaleFactor,
                         original: d.value // Store original for legend
                     }));
+
+                    normalizedBenchmark = benchmarkData.map(d => ({
+                        time: d.time,
+                        value: d.value * scaleFactor,
+                        original: d.value
+                    }));
                 }
             }
 
-            // Chart Properties
-            const chartOptions = {
+            // Injected Constants
+            const INTERVAL = /*INJECT_INTERVAL*/;
+
+            const chartContainer = document.getElementById('tv-chart');
+            const chart = LightweightCharts.createChart(chartContainer, {
+                width: chartContainer.clientWidth,
+                height: chartContainer.clientHeight, // Dynamic height
                 layout: {
-                    textColor: '#d1d4dc',
-                    background: { type: 'solid', color: '#1e222d' },
+                    backgroundColor: '#1e1e1e',
+                    textColor: '#d1d4dc'
                 },
                 grid: {
-                    vertLines: { color: '#2a2e39' },
-                    horzLines: { color: '#2a2e39' },
+                    vertLines: {
+                        color: '#2b2b43'
+                    },
+                    horzLines: {
+                        color: '#2b2b43'
+                    }
                 },
                 crosshair: {
                     mode: LightweightCharts.CrosshairMode.Normal,
@@ -274,10 +321,9 @@
                     timeVisible: true,
                     secondsVisible: false,
                 },
-            };
+            });
 
-            const container = document.getElementById('chart-container');
-            const chart = LightweightCharts.createChart(container, chartOptions);
+
 
             // 1. Candlestick Series
             const candlestickSeries = chart.addCandlestickSeries({
@@ -302,26 +348,35 @@
             volumeSeries.setData(volumeData);
 
 
-            // 3. Equity Series
+
             const equitySeries = chart.addLineSeries({
                 color: '#2962FF',
                 lineWidth: 2,
                 priceScaleId: 'right', // Align with Price (Re-based)
                 title: 'Equity',
                 crosshairMarkerVisible: true,
-                lastValueVisible: false, // Hide normalized value on axis label to avoid confusion? Or show it? 
-                // Showing it on axis might be confusing (showing 90k for equity). 
-                // But user wants to compare "amplitude".
-                // Let's keep it visible but maybe format it? 
-                // Actually, user wants alignment.
+                lastValueVisible: false,
             });
             equitySeries.setData(normalizedEquity);
+
+            // Benchmark Series (Pure Grid)
+            const benchmarkSeries = chart.addLineSeries({
+                color: '#787b86',
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                priceScaleId: 'right',
+                title: 'Pure Grid',
+                crosshairMarkerVisible: false,
+                lastValueVisible: false,
+            });
+            benchmarkSeries.setData(normalizedBenchmark);
 
             // ------------------------------------------
             // Marker Logic
             // ------------------------------------------
             const checkMarkers = document.getElementById('check-markers');
-            const checkLabels = document.getElementById('check-labels');
+            const checkBenchmark = document.getElementById('check-benchmark');
+            const checkEquity = document.getElementById('check-equity');
 
             function updateMarkers() {
                 if (!checkMarkers.checked) {
@@ -329,16 +384,19 @@
                     return;
                 }
 
-                const showText = checkLabels.checked;
-                const currentMarkers = allMarkers.map(m => ({
-                    ...m,
-                    text: showText ? m.text : undefined // Remove text if unchecked
-                }));
-                candlestickSeries.setMarkers(currentMarkers);
+                // Always show text by default since we removed the toggle for simplicity
+                candlestickSeries.setMarkers(allMarkers);
             }
 
             checkMarkers.addEventListener('change', updateMarkers);
-            checkLabels.addEventListener('change', updateMarkers);
+            // checkLabels removed
+            checkBenchmark.addEventListener('change', function () {
+                benchmarkSeries.applyOptions({ visible: this.checked });
+            });
+
+            checkEquity.addEventListener('change', function () {
+                equitySeries.applyOptions({ visible: this.checked });
+            });
 
             // Initial Load
             updateMarkers();
@@ -391,12 +449,15 @@
                 let candle = null;
                 let equity = null;
                 let volume = null;
+                let benchmark = null;
 
                 // Safe access to seriesData
                 if (validCrosshair && param && param.seriesData) {
                     try {
                         candle = param.seriesData.get(candlestickSeries);
                         equity = param.seriesData.get(equitySeries);
+
+                        benchmark = param.seriesData.get(benchmarkSeries);
                         volume = param.seriesData.get(volumeSeries);
                     } catch (e) {
                         // Ignore lookup errors
@@ -442,6 +503,13 @@
 
                     const displayVal = (equity.original !== undefined) ? equity.original : (val / scaleFactor);
                     components.push(`<span style="color:#2962FF">Eq: ${formatPrice(displayVal)}</span>`);
+
+                }
+
+                if (benchmark) {
+                    const val = benchmark.value !== undefined ? benchmark.value : benchmark;
+                    const displayVal = (benchmark.original !== undefined) ? benchmark.original : (val / scaleFactor);
+                    components.push(`<span style="color:#787b86">Pure: ${formatPrice(displayVal)}</span>`);
                 }
 
                 if (volume) {
@@ -455,7 +523,7 @@
             chart.timeScale().fitContent();
 
             window.addEventListener('resize', () => {
-                chart.resize(container.clientWidth, container.clientHeight);
+                chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
             });
 
 
@@ -516,7 +584,13 @@
                 if (refEquity.value > 0) {
                     const newFactor = refCandle.close / refEquity.value;
 
+
                     const newNormalized = equityData.map(d => ({
+                        time: d.time,
+                        value: d.value * newFactor,
+                        original: d.value
+                    }));
+                    const newBenchmark = benchmarkData.map(d => ({
                         time: d.time,
                         value: d.value * newFactor,
                         original: d.value
@@ -524,12 +598,31 @@
 
                     isUpdatingData = true;
                     equitySeries.setData(newNormalized);
+                    benchmarkSeries.setData(newBenchmark);
                     isUpdatingData = false;
                 }
 
             }, 50); // 50ms debounce
 
             chart.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
+
+            // ------------------------------------------
+            // Navigation Helper
+            // ------------------------------------------
+            window.scrollToTimestamp = function (ts) {
+                if (!chart) {
+                    console.error("Chart not initialized");
+                    return;
+                }
+                console.log("Navigating to timestamp:", ts);
+
+                // Focus on +/- 50 candles window
+                const range = 50 * INTERVAL;
+                chart.timeScale().setVisibleRange({
+                    from: ts - range,
+                    to: ts + range
+                });
+            };
 
         } catch (e) {
             document.getElementById('error-display').style.display = 'block';
