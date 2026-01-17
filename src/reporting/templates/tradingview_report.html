@@ -242,6 +242,9 @@
             const candleData = /*INJECT_CANDLES*/;
             const equityData = /*INJECT_EQUITY*/;
             const benchmarkData = /*INJECT_BENCHMARK_EQUITY*/;
+            const probData = /*INJECT_PROB_UNSAFE*/;
+            const suspendThresh = /*INJECT_SUSPEND_THRESH*/;
+            const ejectThresh = /*INJECT_EJECT_THRESH*/;
             const allMarkers = /*INJECT_MARKERS*/; // Contains full data
             const volumeData = /*INJECT_VOLUME*/;
 
@@ -334,16 +337,58 @@
                 wickDownColor: '#f23645',
                 priceScaleId: 'right',
             });
+            candlestickSeries.priceScale().applyOptions({
+                scaleMargins: { top: 0.05, bottom: 0.35 }, // Reserve bottom 35% for Vol + Prob
+            });
             candlestickSeries.setData(candleData);
 
-            // 2. Volume Series
+            // 2. Prob Series (Subplot 1) - Top of bottom section
+            const probSeries = chart.addLineSeries({
+                color: '#E91E63',
+                lineWidth: 1,
+                priceScaleId: 'prob', // Separate Scale
+                title: 'Prob(Unsafe)',
+            });
+            chart.priceScale('prob').applyOptions({
+                scaleMargins: { top: 0.65, bottom: 0.15 }, // Height 20%
+                visible: true,
+                borderColor: '#555',
+            });
+            probSeries.setData(probData);
+
+            // Add Threshold Lines
+            if (suspendThresh > 0) {
+                probSeries.createPriceLine({
+                    price: suspendThresh,
+                    color: '#FFB74D', // Orange
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'Suspend',
+                });
+            }
+            if (ejectThresh > 0 && ejectThresh < 1.0) {
+                probSeries.createPriceLine({
+                    price: ejectThresh,
+                    color: '#D32F2F', // Red
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'Eject',
+                });
+            }
+
+
+
+            // 3. Volume Series (Subplot 2) - Bottom
             const volumeSeries = chart.addHistogramSeries({
                 color: '#26a69a',
                 priceFormat: { type: 'volume' },
-                priceScaleId: '', // Overlay
+                priceScaleId: 'vol', // Overlay or Separate?
             });
-            volumeSeries.priceScale().applyOptions({
-                scaleMargins: { top: 0.8, bottom: 0 },
+            chart.priceScale('vol').applyOptions({
+                scaleMargins: { top: 0.85, bottom: 0 }, // Height 15%
+                visible: false, // Hide scale axis to save space?
             });
             volumeSeries.setData(volumeData);
 
@@ -459,6 +504,7 @@
 
                         benchmark = param.seriesData.get(benchmarkSeries);
                         volume = param.seriesData.get(volumeSeries);
+                        prob = param.seriesData.get(probSeries);
                     } catch (e) {
                         // Ignore lookup errors
                     }
@@ -474,6 +520,7 @@
                         candle = candleData[candleData.length - 1];
                         equity = equityData.find(e => e.time === time); // Might be slow
                         volume = volumeData.find(v => v.time === time);
+                        prob = probData.find(p => p.time === time);
                     } else {
                         // Hovering but no data? (Gap)
                     }
@@ -491,6 +538,13 @@
                     const color = candle.close >= candle.open ? '#089981' : '#f23645';
                     components.push(`<span style="color:${color}">O: ${formatPrice(candle.open)}  H: ${formatPrice(candle.high)}  L: ${formatPrice(candle.low)}  C: ${formatPrice(candle.close)}</span>`);
                 }
+
+                if (prob) {
+                    const val = prob.value !== undefined ? prob.value : prob;
+                    const color = val > 0.4 ? '#ff5252' : '#E91E63'; // Red alert warning color?
+                    components.push(`<span style="color:${color}">Prob: ${val.toFixed(2)}</span>`);
+                }
+
 
                 if (equity) {
                     // Handle both TV object (value) and raw object (value)

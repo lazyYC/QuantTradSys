@@ -58,6 +58,7 @@ class ReportContext:
     metrics_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     equity_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     benchmark_equity_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    signals_df: pd.DataFrame = field(default_factory=pd.DataFrame)
     
     # Internal
     sections: List[Mapping[str, object]] = field(default_factory=list)
@@ -133,30 +134,42 @@ class ReportEngine:
     def _resolve_stop_loss(self) -> None:
         """Resolve stop loss percentage based on override or params."""
         override = self.ctx.stop_loss_arg
-        final_sl = 0.005 # Fallback default
         
         # 1. Override Check
         if override is not None:
             if str(override).lower() == "false":
-                final_sl = 0.0
+                self.ctx.params["stop_loss_pct"] = 0.0
                 LOGGER.info("Stop Loss: DISABLED (Override=False)")
+                return
             else:
                 try:
-                    final_sl = float(override)
-                    LOGGER.info(f"Stop Loss: OVERRIDE to {final_sl:.4f}")
+                    val = float(override)
+                    self.ctx.params["stop_loss_pct"] = val
+                    LOGGER.info(f"Stop Loss: OVERRIDE to {val:.4f}")
+                    return
                 except ValueError:
                     LOGGER.warning(f"Invalid stop-loss arg '{override}', ignoring.")
-            
-            # Inject into params immediately
-            self.ctx.params["stop_loss_pct"] = final_sl
-            return
+        
+        # 2. Check Params (Respect explicitly disabled or set value)
+        # If key exists and is explicitly None or 0.0, keep it.
+        sl_param = self.ctx.params.get("stop_loss_pct")
+        if sl_param is None or sl_param == 0.0:
+             LOGGER.info("Stop Loss: DISABLED (From Strategy Params)")
+             self.ctx.params["stop_loss_pct"] = 0.0
+             return
+             
+        if sl_param is not None and sl_param > 0:
+             # Already set, keep it
+             return
 
-        # 2. Smart Default (Future Return Threshold * 0.5)
+        # 3. Smart Default (Only if missing)
+        # Fallback logic if param completely missing
         indicator_params = self.ctx.params.get("indicator", {})
         thresh = indicator_params.get("future_return_threshold")
         if not thresh:
             thresh = self.ctx.params.get("future_return_threshold", 0.0)
             
+        final_sl = 0.005
         if thresh:
             try:
                 val = float(thresh)
@@ -199,6 +212,8 @@ class ReportEngine:
         except ValueError as e:
             LOGGER.error(e)
             sys.exit(1)
+
+
             
         # Run Backtest with core_start to trim warmup from results
         result = self.strategy_instance.backtest(
@@ -224,6 +239,10 @@ class ReportEngine:
         # Store Benchmark Equity if available
         if hasattr(result, "benchmark_equity_curve") and result.benchmark_equity_curve is not None:
              self.ctx.benchmark_equity_df = result.benchmark_equity_curve
+
+        # Store Signals if available
+        if hasattr(result, "signals") and result.signals is not None:
+             self.ctx.signals_df = result.signals
 
     # ----------------------------------------------------------------
     # TradingView Logic
@@ -296,6 +315,19 @@ class ReportEngine:
                      benchmark_data.append({
                          "time": int(row["time"]),
                          "value": float(row["equity"])
+                     })
+
+        # Signals (Prob Unsafe)
+        prob_data = []
+        if not self.ctx.signals_df.empty:
+             sigs = self.ctx.signals_df.copy()
+             if "timestamp" in sigs.columns:
+                 sigs = filter_by_time(sigs, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
+                 sigs["time"] = pd.to_datetime(sigs["timestamp"], utc=True).astype('int64') // 10**9
+                 for _, row in sigs.iterrows():
+                     prob_data.append({
+                         "time": int(row["time"]),
+                         "value": float(row["prob_unsafe"])
                      })
 
         # Markers (Trades)
@@ -392,14 +424,18 @@ class ReportEngine:
                 t_df["return_numeric"] = pd.to_numeric(t_df["return"], errors='coerce').fillna(0)
                 t_df["hold_numeric"] = pd.to_numeric(t_df["holding_mins"], errors='coerce').fillna(0)
                 
-                corr = t_df["hold_numeric"].corr(t_df["return_numeric"])
+                # Safe correlation (requires > 1 point)
+                corr = t_df["hold_numeric"].corr(t_df["return_numeric"]) if len(t_df) > 1 else 0.0
                 
                 # Check safe indexing
                 long_mask = t_df["side"] == "LONG"
                 short_mask = t_df["side"] == "SHORT"
                 
-                l_corr = t_df.loc[long_mask, "hold_numeric"].corr(t_df.loc[long_mask, "return_numeric"]) if long_mask.any() else 0.0
-                s_corr = t_df.loc[short_mask, "hold_numeric"].corr(t_df.loc[short_mask, "return_numeric"]) if short_mask.any() else 0.0
+                l_df = t_df.loc[long_mask]
+                s_df = t_df.loc[short_mask]
+                
+                l_corr = l_df["hold_numeric"].corr(l_df["return_numeric"]) if len(l_df) > 1 else 0.0
+                s_corr = s_df["hold_numeric"].corr(s_df["return_numeric"]) if len(s_df) > 1 else 0.0
                 
                 analysis_data = {
                     "Corr (Time vs Return) All": f"{corr:.4f}",
@@ -484,6 +520,9 @@ class ReportEngine:
             "/*INJECT_VOLUME*/": json.dumps(volume_data),
             "/*INJECT_EQUITY*/": json.dumps(equity_data),
             "/*INJECT_BENCHMARK_EQUITY*/": json.dumps(benchmark_data),
+            "/*INJECT_PROB_UNSAFE*/": json.dumps(prob_data),
+            "/*INJECT_SUSPEND_THRESH*/": str(self.ctx.params.get("indicator", {}).get("suspend_threshold", 0.4)),
+            "/*INJECT_EJECT_THRESH*/": str(self.ctx.params.get("indicator", {}).get("eject_threshold", 0.8)),
             "/*INJECT_MARKERS*/": json.dumps(markers),
             "/*INJECT_METRICS*/": metrics_html,
             "/*INJECT_DISTRIBUTION*/": dist_html,

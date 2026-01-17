@@ -1,4 +1,4 @@
-"""star_xgb 策略的標籤建構 (Mean Reversion Dynamic Targets)。"""
+"""star_xgb 策略的標籤建構 (Binary Regime Classification: Safe vs Unsafe)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pandas as pd
 
 from .params import StarIndicatorParams
 
-# 3 Classes: -1 (Short), 0 (Neutral), 1 (Long)
-RETURN_CLASSES = (-1, 0, 1)
+# 2 Classes: 0 (Safe/Range), 1 (Unsafe/Trend)
+RETURN_CLASSES = (0, 1)
 
 
 def build_label_frame(
@@ -20,11 +20,14 @@ def build_label_frame(
     thresholds: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
-    根據 Mean Reversion 邏輯建立標籤。
-    Target: Trend MA
-    Logic: Dynamic Triple Barrier
+    根據 Volatility & Breakout 邏輯建立標籤。
+    Target: Binary Unsafe Regime
+    Logic:
+        - Unsafe (1): 如果在未來窗口內，價格波動(最大回撤或最大漲幅)超過 Stop Loss 閾值。
+              這代表「即使做網格也會被 Stop Loss 掃出場」的危險區域。
+        - Safe (0): 價格保持在區間內，適合網格收租。
     """
-    required = {"timestamp", "close", "high", "low", "trend_ma"}
+    required = {"timestamp", "close", "high", "low"}
     missing = required.difference(features.columns)
     if missing:
         raise ValueError(f"標籤建構缺少欄位: {sorted(missing)}")
@@ -32,88 +35,55 @@ def build_label_frame(
     close = features["close"].astype(float)
     high = features["high"].astype(float)
     low = features["low"].astype(float)
-    trend_ma = features["trend_ma"].astype(float)
 
     future_window = max(int(params.future_window), 1)
     
-    # 預設參數 (若 params 中無設定則使用預設值)
-    # stop_loss_pct 應由 params 提供
-    stop_loss_pct = getattr(params, "stop_loss_pct", 0.005)
-    # min_profit_threshold 使用 future_return_threshold
-    min_profit_pct = params.future_return_threshold
-    profit_ratio = 0.4  # 回歸目標的 60% (Relaxed for vector-2.7)
+    # 這裡的 stop_loss_pct 用來定義「什麼是危險波動」
+    # 對於網格來說，如果單邊走勢超過 "網格總寬度" 或 "單筆止損"，就是危險。
+    # 建議使用比單筆止損稍大的值，例如 3~5 倍 ATR 或固定百分比。
+    # 這裡先沿用 params.stop_loss_pct，或建議參數化。
+    # 假設: Unsafe Threshold = 2.0 * ATR? 或者固定 PCT?
+    # 為保持與原參數相容，這裡使用 params.stop_loss_pct * 2.0 作為 "Major Trend Threshold"
+    # 或者直接使用 future_return_threshold 作為 "Volatility Limit"
+    
+    vol_threshold = params.future_return_threshold 
+    if vol_threshold <= 0:
+        vol_threshold = 0.01 # Fallback 1%
 
     # Forward Window Calculation
-    # 使用 FixedForwardWindowIndexer 來正確計算未來窗口的極值
     indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=future_window)
-    # shift(-1) 因為我們是在當前 bar 結束時做決策，看向未來 N 根 (不含當前)
-    # 但 FixedForwardWindow 包含起點。
-    # 嚴謹來說：Entry Price = Close.
-    # High/Low Check 應從 Next Bar 開始。
-    # 所以先 shift(-1) 再 rolling 是正確的。
+    
     future_max_high = high.shift(-1).rolling(window=indexer).max()
     future_min_low = low.shift(-1).rolling(window=indexer).min()
 
-    # Calculate Distance and Targets
-    dist = close - trend_ma
-    dist_pct = (dist.abs() / close).replace([np.inf, -np.inf], 0.0)
-
-    # 只有當乖離夠大才有交易價值
-    valid_mask = dist_pct >= min_profit_pct
-
-    labels = np.zeros(len(close), dtype=int)
-
-    # --- Long Logic (Price < MA) ---
-    long_mask = (dist < 0) & valid_mask
+    # Calculate Max Run-up and Max Drawdown relative to Current Close
+    # Note: We care about "Unidirectional Move".
+    # If price goes up 2% AND down 2% in the window -> This is High Volatility, also Dangerous?
+    # Yes. Whipsaw is also dangerous for tight grids.
     
-    long_tp = close + dist.abs() * profit_ratio
-    long_sl = close * (1.0 - stop_loss_pct)
+    max_upside = (future_max_high - close) / close
+    max_downside = (close - future_min_low) / close
     
-    # Success: Reversion (Targets TP, avoids SL)
-    long_success = (future_max_high >= long_tp) & (future_min_low > long_sl)
+    # Label Generation
+    # If upside > threshold OR downside > threshold -> Unsafe (1)
+    is_unsafe = (max_upside > vol_threshold) | (max_downside > vol_threshold)
     
-    # Failure: Breakdown (Hits SL)
-    # If support breaks, it was a Short opportunity (Trend Continuation)
-    long_breakdown = (future_min_low <= long_sl)
-    
-    labels[long_mask & long_success] = 1
-    # Overwrite breakdown as -1 (Short Signal), but only if it wasn't a success (though success check handles it)
-    # Note: If volatile, it might hit both. Our conservative success check (future_min_low > long_sl) ensures mutual exclusivity.
-    labels[long_mask & long_breakdown] = -1
-
-    # --- Short Logic (Price > MA) ---
-    short_mask = (dist > 0) & valid_mask
-    
-    short_tp = close - dist.abs() * profit_ratio
-    short_sl = close * (1.0 + stop_loss_pct)
-    
-    # Success: Reversion (Targets TP, avoids SL)
-    short_success = (future_min_low <= short_tp) & (future_max_high < short_sl)
-    
-    # Failure: Breakout (Hits SL)
-    # If resistance breaks, it was a Long opportunity
-    short_breakout = (future_max_high >= short_sl)
-
-    labels[short_mask & short_success] = -1
-    labels[short_mask & short_breakout] = 1
+    labels = is_unsafe.astype(int).values
 
     # --- Auxiliary Columns ---
-    # 為了保持 dataset 結構完整性，保留 future_close_return 計算
+    # 計算未來實質漲跌幅供分析
     future_close = close.shift(-future_window)
-    future_long_return = (future_close - close) / close.replace(0.0, pd.NA)
-    future_short_return = -future_long_return
+    future_return = (future_close - close) / close.replace(0.0, pd.NA)
     
-    # 這裡的欄位名稱必須與 dataset.py 或 backtest.py 預期的一致
     label_frame = features[["timestamp"]].copy()
-    label_frame["future_long_return"] = future_long_return
-    label_frame["future_short_return"] = future_short_return
-    label_frame["return_class"] = labels # Explicit name matching TARGET_COLUMN usually
+    label_frame["future_return"] = future_return
+    label_frame["max_upside"] = max_upside
+    label_frame["max_downside"] = max_downside
+    label_frame["return_class"] = labels 
     
-    # 補上舊欄位以免 break code (雖然 dataset.py 裡 list_feature_columns 排除它們，但 merge 時可能用到)
-    label_frame["future_min_return"] = 0.0
-    label_frame["future_best_short_return"] = 0.0
-    label_frame["future_best_long_return"] = 0.0
-    label_frame["future_close_return"] = future_long_return
+    # Legacy columns filler
+    label_frame["future_long_return"] = future_return
+    label_frame["future_short_return"] = -future_return
 
     return label_frame, {}
 

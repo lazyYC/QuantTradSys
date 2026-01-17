@@ -27,6 +27,7 @@ class StarBacktestResult:
     period_start: Optional[pd.Timestamp]
     period_end: Optional[pd.Timestamp]
     benchmark_equity_curve: Optional[pd.DataFrame] = None
+    signals: Optional[pd.DataFrame] = None
 
 
 def backtest_star_xgb(
@@ -113,6 +114,29 @@ def backtest_star_xgb(
     feature_array = dataset[feature_columns].to_numpy(dtype=float, copy=False)
     probs = booster.predict(feature_array)
     probs = probs.reshape(len(dataset), -1)
+    
+    # Capture Signals (New Logic)
+    # Handle both Multiclass (N, 2) and Binary (N,) output shapes from LightGBM
+    if probs.ndim == 1:
+        # If 1D, assume it is P(Unsafe) equivalent to column 1 if binary
+        prob_unsafe = probs
+    elif probs.shape[1] >= 2:
+        # If 2D, take column 1 (Unsafe)
+        prob_unsafe = probs[:, 1]
+    else:
+        # Fallback
+        prob_unsafe = np.zeros(len(dataset))
+        
+    # Debug: Check if prob_unsafe is all zero
+    if len(prob_unsafe) > 0:
+        avg_p = np.mean(prob_unsafe)
+        max_p = np.max(prob_unsafe)
+        print(f"[DEBUG] Prob Unsafe Check: Avg={avg_p:.4f}, Max={max_p:.4f}, Zeros={np.sum(prob_unsafe == 0)}/{len(prob_unsafe)}")
+
+    signals_df = pd.DataFrame({
+        "timestamp": dataset["timestamp"],
+        "prob_unsafe": prob_unsafe
+    })
 
     class_means_arr = np.asarray(class_means, dtype=float)
     class_means_arr = np.asarray(class_means, dtype=float)
@@ -126,103 +150,7 @@ def backtest_star_xgb(
             class_means_arr,
             transaction_cost=transaction_cost,
         )
-        # For vectorized, we don't have real trades with entry/exit times.
-        # We need to construct a dummy trades DataFrame or similar for consistency?
-        # Or just leave trades empty?
-        # If trades is empty, equity curve will be empty.
-        # But we want to see the performance.
-        # Let's try to construct "virtual trades" for every row that matches?
-        # That might be too many trades.
-        # For now, let's keep trades empty or minimal, but ensure metrics are correct.
-        # Actually, _evaluate_vectorized returns 'total_return', 'win_rate' etc.
-        # We can skip _build_signal_records if vectorized.
         trades = pd.DataFrame() 
-        # But wait, save_trades expects a DataFrame.
-        # And we want to see the equity curve?
-        # If we want equity curve, we need a time series of returns.
-        # We can construct a simple "timestamp, return" frame.
-        
-        # Let's reconstruct the PnL series as in _evaluate_vectorized
-        expected_returns = probs @ class_means_arr
-        pred_idx = probs.argmax(axis=1)
-        pred_class = CLASS_VALUES[pred_idx]
-        threshold = float(model_params.decision_threshold)
-        
-        mask_long = (pred_class == 1.0) & (expected_returns >= threshold)
-        mask_short = (pred_class == -1.0) & (expected_returns >= threshold)
-        
-        pnl = np.zeros(len(dataset))
-        if mask_long.any():
-            pnl[mask_long] = dataset.loc[mask_long, "future_long_return"].fillna(0.0) - transaction_cost
-        if mask_short.any():
-            pnl[mask_short] = dataset.loc[mask_short, "future_short_return"].fillna(0.0) - transaction_cost
-            
-        # Construct a "trades" DF where each active row is a trade
-        active_mask = mask_long | mask_short
-        if active_mask.any():
-            active_indices = np.where(active_mask)[0]
-            # Parse timeframe to timedelta
-            # Assuming timeframe is like "5m", "1h", "1d"
-            tf_unit = timeframe[-1]
-            tf_val = int(timeframe[:-1])
-            if tf_unit == "m":
-                delta = pd.Timedelta(minutes=tf_val)
-            elif tf_unit == "h":
-                delta = pd.Timedelta(hours=tf_val)
-            elif tf_unit == "d":
-                delta = pd.Timedelta(days=tf_val)
-            else:
-                delta = pd.Timedelta(minutes=5) # Fallback
-            
-            hold_duration = delta * indicator_params.future_window
-            holding_mins = hold_duration.total_seconds() / 60
-
-            records = []
-            for idx in active_indices:
-                row = dataset.iloc[idx]
-                is_long = mask_long[idx]
-                side = "LONG" if is_long else "SHORT"
-                
-                # Retrieve raw return from dataset (without transaction cost)
-                raw_return = (
-                    row["future_long_return"] if is_long 
-                    else row["future_short_return"]
-                )
-                if pd.isna(raw_return):
-                    raw_return = 0.0
-                    
-                entry_p = row["close"]
-                # Calculate Exit Price based on Return
-                # Long: Ret = (Exit - Entry) / Entry => Exit = Entry * (1 + Ret)
-                # Short: Ret = (Entry - Exit) / Entry => Exit = Entry * (1 - Ret)
-                if is_long:
-                    exit_p = entry_p * (1 + raw_return)
-                else:
-                    exit_p = entry_p * (1 - raw_return)
-
-                ret = pnl[idx] # This includes transaction cost subtraction
-                entry_time = row["timestamp"]
-                exit_time = entry_time + hold_duration
-                
-                records.append({
-                    "run_id": "vectorized", # Dummy
-                    "strategy": "playground", # Dummy
-                    "entry_time": entry_time,
-                    "exit_time": exit_time,
-                    "side": side,
-                    "entry_price": entry_p,
-                    "exit_price": exit_p, 
-                    "return": ret,
-                    "holding_mins": holding_mins,
-                    "entry_zscore": 0,
-                    "exit_zscore": 0,
-                    "exit_reason": "vectorized",
-                    "entry_expected_return": expected_returns[idx],
-                })
-            trades = pd.DataFrame(records)
-        else:
-            trades = pd.DataFrame()
-
     else:
         metrics = _evaluate(
             dataset,
@@ -337,6 +265,7 @@ def backtest_star_xgb(
         equity_curve=equity_curve,
         period_start=period_start,
         period_end=period_end,
+        signals=signals_df,
     )
 
 
@@ -365,14 +294,24 @@ def _build_signal_records(
         probs = np.asarray(predicted_probs, dtype=float)
     probs = probs.reshape(len(dataset), -1)
 
-    class_means_arr = np.asarray(class_means, dtype=float)
-    expected_returns = probs @ class_means_arr
+    # [FIX] Calculate Prob(Unsafe) directly
+    if probs.ndim == 1:
+        prob_unsafe = probs
+    elif probs.shape[1] >= 2:
+        prob_unsafe = probs[:, 1]
+    else:
+        prob_unsafe = np.zeros(len(dataset))
+        
     pred_idx = probs.argmax(axis=1)
     pred_class = CLASS_VALUES[pred_idx]
 
+    # For Binary Classification in v1.6.0, we pass prob_unsafe as "expected_returns"
+    # because model.py's _simulate_trades expects "expected_returns" to be the signal for Eject/Suspend
+    # See model.py line 303: frame["prob_unsafe"] = expected_returns
+    
     trades = _simulate_trades(
         dataset,
-        expected_returns,
+        prob_unsafe, # PASS PROBABILITY HERE
         pred_class,
         model_params,
         indicator_params=indicator_params,

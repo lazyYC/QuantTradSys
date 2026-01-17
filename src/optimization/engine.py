@@ -109,7 +109,7 @@ def optimize_strategy(
             raise optuna.TrialPruned("No scores computed")
             
         avg_score = sum(seed_scores) / len(seed_scores)
-        LOGGER.info(f"Trial {trial.number} finished. Avg {metric}: {avg_score:.4f}. Params: {optuna_params}")
+        # LOGGER.info(f"Trial {trial.number} finished. Avg {metric}: {avg_score:.4f}. Params: {optuna_params}")
         return avg_score
 
     study.optimize(objective, n_trials=n_trials)

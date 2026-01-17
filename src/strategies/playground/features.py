@@ -240,8 +240,7 @@ class StarFeatureCache:
         
         # --- NEW FEATURES END ---
 
-        # Removed trade_amount (non-stationary)
-        # frame["trade_amount"] = close * volume
+
         
         frame["open_rel"] = (open_ - safe_prev_close) / safe_prev_close
         frame["high_rel"] = (high - safe_prev_close) / safe_prev_close
@@ -299,21 +298,19 @@ def _compute_atr(df: pd.DataFrame, window: int) -> pd.Series:
 def _compute_rsi(series: pd.Series, window: int) -> pd.Series:
     """Compute RSI using Wilder's Smoothing."""
     diff = series.diff()
-    gain = diff.clip(lower=0).replace(0, np.nan) # replace 0 with nan to init first average
-    loss = -diff.clip(upper=0).replace(0, np.nan)
+    gain = diff.clip(lower=0.0)
+    loss = -diff.clip(upper=0.0)
     
     # Standard Wilder's RSI calculation
-    # First Average Gain
+    # First Average Gain: Simple Average
     avg_gain = gain.rolling(window=window, min_periods=window).mean()
     avg_loss = loss.rolling(window=window, min_periods=window).mean()
     
-    # For subsequent steps, use exponential smoothing (alpha=1/window)
-    # Actually, Pandas ewm(com=window-1) is similar to Wilder
-    # Wilder's smoothing alpha = 1/N. Pandas ewm alpha=1/(1+com). So com=N-1.
+    # Subsequent: Smoothed
     avg_gain = gain.ewm(com=window-1, min_periods=window, adjust=False).mean()
     avg_loss = loss.ewm(com=window-1, min_periods=window, adjust=False).mean()
     
-    rs = avg_gain / avg_loss
+    rs = avg_gain / (avg_loss + 1e-9)
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
