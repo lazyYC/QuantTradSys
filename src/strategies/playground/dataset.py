@@ -137,9 +137,9 @@ def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
         TARGET_COLUMN,
         SAMPLE_WEIGHT_COLUMN,
         "future_close_return",
-        "future_return", # [FIXED v1.8.6] Critical Leakage Fix
-        "max_upside",     # [FIXED v1.8.6] Critical Leakage Fix
-        "max_downside",   # [FIXED v1.8.6] Critical Leakage Fix
+        "future_return",
+        "max_upside",
+        "max_downside",
         "future_min_return",
         "future_short_return",
         "future_best_short_return",

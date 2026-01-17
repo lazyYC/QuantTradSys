@@ -484,9 +484,7 @@ def suggest_indicator_params(
     params["atr_trailing_mult"] = trial.suggest_float("atr_trailing_mult", 2.0, 6.0, step=0.5)
     params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.5, 0.85, step=0.05)
     
-    # ADX Threshold - We want Strong Trends?
-    # Actually for breakout, maybe we ignore ADX or use it to filter chop?
-    # Let's optimize it as a minimum requirement for breakout.
+    # ADX Threshold Optimization
     params["adx_threshold"] = trial.suggest_int("adx_threshold", 15, 40, step=5) # Trend Strength > X
 
     return StarIndicatorParams(**params)

@@ -374,8 +374,7 @@ def _simulate_trades(
             exit_fill_price = 0.0
             
             if side == "LONG":
-                # [MODIFIED v1.8.3] Sequence Fix: Check Exit First (using Prev Stop)
-                # Prevent "Self-Sabotage" where a big candle pulls stop up into its own Low.
+                # Check exit condition first to ensure safety (prevent self-sabotage on big candles)
                 if low_price <= prev_stop:
                     should_exit = True
                     exit_fill_price = prev_stop
@@ -406,18 +405,14 @@ def _simulate_trades(
                     t["stop_price"] = new_stop
             
             if should_exit:
-                # Calculate PnL
-                # Assume filled at stop price (slippage simplified)
-                # But if gap occurred, we fill at Open or Low/High?
-                # Simulation simplifiction: Use Stop Price (Perfect Fill) or Limit?
-                # Let's use Stop Price for consistency with logic.
+                # Calculate PnL (assuming perfect fill at stop price)
                 exit_fill = exit_fill_price
                 
                 ret = (exit_fill - entry)/entry if side == "LONG" else (entry - exit_fill)/entry
                 gross_ret = ret
                 if transaction_cost: ret -= transaction_cost
                 
-                # [MODIFIED v1.8.1] Descriptive Exit Reason
+                # Determine exit reason
                 if gross_ret > 0:
                     exit_reason = "trailing_stop_profit"
                 else:
@@ -471,7 +466,7 @@ def _simulate_trades(
                         "entry_prob_unsafe": prob,
                         "entry_class": 1,
                         "highest_high": close_price, 
-                        "stop_price": init_stop, # [MODIFIED v1.8.2] Init Stop
+                        "stop_price": init_stop,
                     })
             
             # Short Breakout
@@ -487,7 +482,7 @@ def _simulate_trades(
                         "entry_prob_unsafe": prob,
                         "entry_class": 1,
                         "lowest_low": close_price,
-                        "stop_price": init_stop, # [MODIFIED v1.8.2] Init Stop
+                        "stop_price": init_stop,
                     })
 
     # Cleanup Exit

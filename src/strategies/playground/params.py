@@ -31,7 +31,7 @@ class StarIndicatorParams:
     macd_signal: int = 9
     bb_window: int = 20
     bb_std: float = 2.0
-    stop_loss_pct: Optional[float] = None # [MODIFIED v1.8.1] Disabled fixed SL. Rely on ATR Trailing.
+    stop_loss_pct: Optional[float] = None
     
     # New Risk Controls
     adx_threshold: float = 30.0
@@ -44,13 +44,7 @@ class StarIndicatorParams:
     atr_trailing_mult: float = 3.0 # Multiplier for ATR Trailing Stop
     trigger_threshold: float = 0.6 # Prob(Unsafe) to trigger Breakout Mode
     
-    # Deprecated Grid Controls
-    # grid_step_atr: float = 1.0 
-    # max_grid_layers: int = 10    
-    # eject_threshold: float = 0.8 
-    # suspend_threshold: float = 0.4 
-    # trend_filter_ma_window: int = 200 
-    # pure_grid: bool = False 
+ 
 
 
     _ROUND_DECIMALS: ClassVar[Dict[str, int]] = {
