@@ -262,7 +262,18 @@ def _simulate_trades(
     min_hold_bars: int = 0,
     profit_ratio: float = 0.4,
 ) -> pd.DataFrame:
-    """依據預測類別與預期報酬模擬交易，回傳完整交易表。"""
+    """
+    v1.6.0 Simulation Logic: Smart Grid with Staged Reaction & Directional Bias.
+    
+    Roles:
+    - Pure Grid: Beta (Volatility Harvesting)
+    - ML Model: Alpha (Risk Avoidance / Regime Filter)
+      - Prob(Unsafe) > Suspend_Threshold: Suspend New Entries (Yellow Alert)
+      - Prob(Unsafe) > Eject_Threshold: Panic Close (Red Alert)
+    - Directional Bias:
+      - Price > TrendMA: Long Grid Only
+      - Price < TrendMA: Short Grid Only
+    """
     trade_columns = [
         "side",
         "entry_time",
@@ -271,8 +282,8 @@ def _simulate_trades(
         "exit_price",
         "return",
         "holding_mins",
-        "entry_expected_return",
-        "exit_expected_return",
+        "entry_prob_unsafe", # Replaces entry_expected_return
+        "exit_prob_unsafe",  # Replaces exit_expected_return
         "entry_class",
         "exit_class",
         "exit_reason",
@@ -285,336 +296,228 @@ def _simulate_trades(
     frame = df.copy()
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    frame["expected_return_sim"] = expected_returns
-    frame["predicted_class_sim"] = pred_classes
     
-    # Ensure trend_ma is present (it should be in dataset)
+    # Note: For Binary Classification, "expected_returns" is actually Prob(Class 1 = Unsafe)
+    # LightGBM predict_proba returns [Prob(0), Prob(1)]
+    # We should have passed Prob(1) as expected_returns in _evaluate
+    frame["prob_unsafe"] = expected_returns 
+    frame["predicted_class_sim"] = pred_classes # 0 or 1
+    
+    # Ensure external features exist
     if "trend_ma" not in frame.columns:
-        # Fallback or error? If missing, we can't calc target.
-        # Assuming it's present as verified.
-        pass
+        pass # Should be there
 
     frame = frame.dropna(
-        subset=["timestamp", "close", "expected_return_sim", "predicted_class_sim"]
+        subset=["timestamp", "close", "prob_unsafe"]
     )
 
-    threshold = float(params.decision_threshold)
-    open_trade: Optional[Dict[str, object]] = None
-    records: List[Dict[str, object]] = []
-    min_hold = max(int(min_hold_bars), 0)
-
+    # --- Strategy Parameters (v1.8.0 Volatility Breakout) ---
+    ind_params = indicator_params if indicator_params else StarIndicatorParams(
+        trend_window=200, slope_window=20, atr_window=14, volatility_window=20,
+        volume_window=20, pattern_lookback=3, upper_shadow_min=0.65, 
+        body_ratio_max=0.3, volume_ratio_max=0.6, future_window=12, future_return_threshold=0.01
+    )
+    
+    breakout_window = getattr(ind_params, "breakout_window", 20)
+    atr_mult = getattr(ind_params, "atr_trailing_mult", 3.0)
+    trigger_thresh = getattr(ind_params, "trigger_threshold", 0.6)
+    
+    # Calculate Donchian Channel (Shifted by 1 to avoid lookahead bias on High/Low)
+    # We want breakout of *previous* N bars high/low.
+    frame["donchian_high"] = frame["high"].rolling(breakout_window).max().shift(1)
+    frame["donchian_low"] = frame["low"].rolling(breakout_window).min().shift(1)
+    
+    # ATR Calculation (v1.8.0)
+    if "atr" not in frame.columns:
+        # Simple estimation if feature missing, but it should be there from features.py usually?
+        # Let's calculate simple rolling TR approximation
+        tr = np.maximum(frame["high"] - frame["low"], np.abs(frame["high"] - frame["close"].shift(1)))
+        frame["atr"] = tr.rolling(14).mean().bfill() # Default to 14 if not in params
+        
     records = []
     open_trades: List[Dict] = []
-    MAX_STACKS = 5
     
-    # Pre-computation / Extraction
-    prices = frame["close"].values
-    highs = frame["high"].values if "high" in frame.columns else prices
-    lows = frame["low"].values if "low" in frame.columns else prices
-    times = frame["timestamp"].values
+    # Extract Arrays for Speed
+    timestamps = frame["timestamp"].values
+    closes = frame["close"].values
+    highs = frame["high"].values
+    lows = frame["low"].values
+    donchian_highs = frame["donchian_high"].values
+    donchian_lows = frame["donchian_low"].values
+    probs = frame["prob_unsafe"].values
+    atrs = frame["atr"].values
     
-    # Ensure features exist
-    trend_mas = frame["trend_ma"].values if "trend_ma" in frame.columns else prices
-    atrs = frame["atr"].values if "atr" in frame.columns else (prices * 0.01)
-    adxs = frame["adx"].values if "adx" in frame.columns else np.zeros_like(prices)
-    
-    # Grid Parameters
-    max_layers = getattr(indicator_params, "max_grid_layers", 3) if indicator_params else 3
-    step_atr = getattr(indicator_params, "grid_step_atr", 1.0) if indicator_params else 1.0
-    adx_cutoff = getattr(indicator_params, "adx_threshold", 50.0) if indicator_params else 50.0
-    is_pure_grid = getattr(indicator_params, "pure_grid", False) if indicator_params else False
-    
-    open_trades = [] # List of dict
+    max_open = ind_params.max_open_trades
 
-    for i in range(len(prices)):
-        close_price = prices[i]
+
+    for i in range(len(closes)):
+        current_time = timestamps[i]
+        close_price = closes[i]
         high_price = highs[i]
         low_price = lows[i]
-        current_time = times[i]
+        dh = donchian_highs[i]
+        dl = donchian_lows[i]
+        prob = probs[i]
+        atr = atrs[i]
         
-        ma_val = trend_mas[i]
-        atr_val = atrs[i]
-        adx_val = adxs[i]
-        
-        pred_class = pred_classes[i]
-        expected_ret = expected_returns[i] # Used for logging
-
-        # --- 1. EJECT & GLOBAL RISK CHECK ---
-        # "AI Eject Button": If holding positions and market turns into Strong Trend against us, Close ALL.
-        # Bypass for Pure Grid (Pure Grid should hold through drawdown)
-        
-        if not is_pure_grid:
-            should_eject = False
-            if open_trades:
-                # Condition: Strong Trend
-                is_strong_trend = adx_val > adx_cutoff
-                
-                # Check for Flip/Reversal Signal in Strong Trend
-                current_side = open_trades[0]["side"] # Assuming all one side
-                
-                if is_strong_trend:
-                    if current_side == "LONG" and pred_class == -1.0: # AI says Short
-                         should_eject = True
-                    elif current_side == "SHORT" and pred_class == 1.0: # AI says Long
-                         should_eject = True
-                
-                # Calculate Global Drawdown
-                current_pnl = 0.0
-                for t in open_trades:
-                    entry = t["entry_price"]
-                    pnl = (close_price - entry)/entry if t["side"] == "LONG" else (entry - close_price)/entry
-                    current_pnl += pnl # Sum of PnLs
-                
-                # Check Max Drawdown
-                max_dd = indicator_params.max_global_drawdown_pct if indicator_params else 0.05
-                if current_pnl < -max_dd:
-                    should_eject = True # Force close via Eject path
-                    
-                if should_eject:
-                    exit_reason = "eject_adx" if (is_strong_trend and current_pnl >= -max_dd) else "global_drawdown"
-                    for t in open_trades:
-                         side = t["side"]
-                         entry = t["entry_price"]
-                         ret = (close_price - entry)/entry if side == "LONG" else (entry - close_price)/entry
-                         if transaction_cost: ret -= transaction_cost
-                         
-                         delta = pd.to_datetime(current_time, utc=True) - pd.to_datetime(t["entry_time"], utc=True)
-                         holding_minutes = max(delta.total_seconds() / 60.0, 0.0)
-                         
-                         records.append({
-                            "side": side,
-                            "entry_time": t["entry_time"],
-                            "exit_time": current_time,
-                            "entry_price": entry,
-                            "exit_price": close_price,
-                            "return": ret,
-                            "holding_mins": holding_minutes,
-                            "entry_expected_return": t["entry_expected_return"],
-                            "exit_expected_return": expected_ret,
-                            "entry_class": t["entry_class"],
-                            "exit_class": pred_class,
-                            "exit_reason": exit_reason,
-                            "entry_zscore": t.get("entry_zscore", 0.0),
-                            "exit_zscore": expected_ret,
-                         })
-                    open_trades = []
-                    continue # Skip entry logic
-
-        # --- 2. UPDATE OPEN TRADES (TP EXIT) ---
+        # --- 1. Manage Open Trades (Trailing Stop) ---
         new_open_trades = []
-        trade_closed = False
-        
         for t in open_trades:
             side = t["side"]
             entry = t["entry_price"]
+            # Get existing state
+            highest_high = t.get("highest_high", entry)
+            lowest_low = t.get("lowest_low", entry)
+            prev_stop = t.get("stop_price", entry) 
             
-            # Take Profit: Return to MA
-            # Logic: If price crosses MA, we exit.
-            take_profit = False
-            exit_price = ma_val
+            should_exit = False
+            exit_fill_price = 0.0
             
             if side == "LONG":
-                # High reached MA?
-                if high_price >= ma_val:
-                    take_profit = True
-                    # Fill at MA or Open if opened above MA? No, opened below.
-                    # Fill at MAX(Open, MA) if gap up? 
-                    # Conservative: Fill at MA.
-                    exit_price = max(ma_val, t.get("entry_price")) # Ensure no loss if entry was somehow above MA (unlikely)
-            else:
-                # Low reached MA?
-                if low_price <= ma_val:
-                    take_profit = True
-                    exit_price = min(ma_val, t.get("entry_price"))
-            
-            # A. Stop Loss Check
-            stop_triggered = False
-            current_close_for_exit = close_price # Default exit price if not TP/SL
-            if stop_loss_pct is not None and stop_loss_pct > 0.0:
-                entry_price = t["entry_price"]
-                if side == "LONG":
-                    unrealized = (low_price - entry_price) / entry_price
+                # [MODIFIED v1.8.3] Sequence Fix: Check Exit First (using Prev Stop)
+                # Prevent "Self-Sabotage" where a big candle pulls stop up into its own Low.
+                if low_price <= prev_stop:
+                    should_exit = True
+                    exit_fill_price = prev_stop
                 else:
-                    unrealized = (entry_price - high_price) / entry_price
+                    # If Safe -> Update for NEXT bar
+                    if high_price > highest_high:
+                        highest_high = high_price
+                        t["highest_high"] = highest_high
                     
-                if unrealized <= -stop_loss_pct:
-                    stop_triggered = True
-
-            # B. Target Exit Check (Target Locked at Entry)
-            target_p = t.get("target_price") # Assuming target_price might be set in trade dict
-            if target_p is not None:
-                if side == "LONG":
-                     if high_price >= target_p:
-                          take_profit = True
-                          current_close_for_exit = target_p
+                    # Monotonic Calculation
+                    raw_stop = highest_high - (atr * atr_mult)
+                    new_stop = max(prev_stop, raw_stop)
+                    t["stop_price"] = new_stop
+                    
+            else: # SHORT
+                # Check Exit First
+                if high_price >= prev_stop:
+                    should_exit = True
+                    exit_fill_price = prev_stop
                 else:
-                     if low_price <= target_p:
-                          take_profit = True
-                          current_close_for_exit = target_p
-
-            if not take_profit and not stop_triggered:
-                 new_open_trades.append(t)
-            elif take_profit or stop_triggered:
-                 # Record exit
-                 exit_price_final = current_close_for_exit if take_profit else (
-                     t["entry_price"] * (1 - stop_loss_pct) if side == "LONG" else t["entry_price"] * (1 + stop_loss_pct)
-                 )
-                 # Adjust if gap exceeded limit? For this sim, accept price.
-                 
-                 ret = (exit_price_final - entry)/entry if side == "LONG" else (entry - exit_price_final)/entry
-                 if transaction_cost: ret -= transaction_cost
-                 
-                 delta = pd.to_datetime(current_time, utc=True) - pd.to_datetime(t["entry_time"], utc=True)
-                 holding_minutes = max(delta.total_seconds() / 60.0, 0.0)
-                 
-                 records.append({
+                    # If Safe -> Update for NEXT bar
+                    if low_price < lowest_low:
+                        lowest_low = low_price
+                        t["lowest_low"] = lowest_low
+                        
+                    raw_stop = lowest_low + (atr * atr_mult)
+                    new_stop = min(prev_stop, raw_stop)
+                    t["stop_price"] = new_stop
+            
+            if should_exit:
+                # Calculate PnL
+                # Assume filled at stop price (slippage simplified)
+                # But if gap occurred, we fill at Open or Low/High?
+                # Simulation simplifiction: Use Stop Price (Perfect Fill) or Limit?
+                # Let's use Stop Price for consistency with logic.
+                exit_fill = exit_fill_price
+                
+                ret = (exit_fill - entry)/entry if side == "LONG" else (entry - exit_fill)/entry
+                gross_ret = ret
+                if transaction_cost: ret -= transaction_cost
+                
+                # [MODIFIED v1.8.1] Descriptive Exit Reason
+                if gross_ret > 0:
+                    exit_reason = "trailing_stop_profit"
+                else:
+                    exit_reason = "trailing_stop_loss"
+                
+                delta = pd.to_datetime(current_time) - pd.to_datetime(t["entry_time"])
+                
+                records.append({
                     "side": side,
                     "entry_time": t["entry_time"],
                     "exit_time": current_time,
                     "entry_price": entry,
-                    "exit_price": exit_price_final,
+                    "exit_price": exit_fill,
                     "return": ret,
-                    "holding_mins": holding_minutes,
-                    "entry_expected_return": t["entry_expected_return"],
-                    "exit_expected_return": expected_ret,
+                    "holding_mins": delta.total_seconds() / 60.0,
+                    "entry_prob_unsafe": t["entry_prob_unsafe"],
+                    "exit_prob_unsafe": prob,
                     "entry_class": t["entry_class"],
-                    "exit_class": pred_class,
-                    "exit_reason": "take_profit" if take_profit else "stop_loss",
-                    "entry_zscore": t.get("entry_zscore", 0.0),
-                    "exit_zscore": expected_ret,
-                 })
-
+                    "exit_class": 0,
+                    "exit_reason": exit_reason,
+                    "entry_zscore": 0.0,
+                    "exit_zscore": 0.0,
+                })
+            else:
+                new_open_trades.append(t)
+        
         open_trades = new_open_trades
-
-        # --- 3. GRID ENTRY (LAYERING) ---
-        # Logic: 
-        # Long Entry: Price < MA (Neg Deviation). Pred Class = Long/Bullish.
-        # Short Entry: Price > MA (Pos Deviation). Pred Class = Short/Bearish.
-        # Layering: 
-        #   L0: Deviation 0 to 1 Step
-        #   L1: Deviation 1 to 2 Steps
-        #   ...
         
-        # Calculate Deviation
-        dev_atr = (close_price - ma_val) / atr_val if atr_val > 0 else 0.0
+        # --- 2. Entry Logic ---
+        # Single position per side logic (or max_open check)
         
-        # Determine Signal and Direction
-        # AI Gate:
-        # If Pred Class is LONG (1 or 2): Look to LONG.
-        # If Pred Class is SHORT (-1 or -2): Look to SHORT.
-        
-        # AI Gate / Pure Grid Override
-        # is_pure_grid already defined at top
-
-        if is_pure_grid:
-            to_long = True
-            to_short = True
-            valid_trend = True
-        else:
-            to_long = pred_class > 0
-            to_short = pred_class < 0
-            # ADX Gate
-            valid_trend = adx_val < adx_cutoff
-        
-        if valid_trend and (to_long or to_short):
-            # Calculate required layer based on price deviation
-            # For LONG: We want to buy dips. dev_atr should be negative.
-            # Layer index = int(abs(dev_atr) / step_atr)
+        if len(open_trades) >= max_open:
+            continue
             
-            target_layer_idx = -1
+        # Trigger Condition: AI says "Unsafe" (High Volatility Incoming)
+        if prob > trigger_thresh:
             
-            if to_long and dev_atr < 0: # Price below MA
-                 target_layer_idx = int(abs(dev_atr) / step_atr)
-            elif to_short and dev_atr > 0: # Price above MA
-                 target_layer_idx = int(abs(dev_atr) / step_atr)
-                 
-            # Clamp to max layers
-            if target_layer_idx >= max_layers:
-                target_layer_idx = max_layers - 1
+            # Action Condition: Breakout
             
-            if target_layer_idx >= 0:
-                 # Dead Zone: Skip Layer 0 to avoid Fee Churn (trading noise < step_atr)
-                 if target_layer_idx < 1:
-                     continue
+            # Long Breakout
+            if close_price > dh and not np.isnan(dh):
+                # Check if we already have a long
+                has_long = any(t["side"] == "LONG" for t in open_trades)
+                if not has_long:
+                    # Init initial stop
+                    init_stop = close_price - (atr * atr_mult)
+                    open_trades.append({
+                        "side": "LONG",
+                        "entry_time": current_time,
+                        "entry_price": close_price,
+                        "entry_prob_unsafe": prob,
+                        "entry_class": 1,
+                        "highest_high": close_price, 
+                        "stop_price": init_stop, # [MODIFIED v1.8.2] Init Stop
+                    })
+            
+            # Short Breakout
+            elif close_price < dl and not np.isnan(dl):
+                # Check if we already have a short
+                has_short = any(t["side"] == "SHORT" for t in open_trades)
+                if not has_short:
+                    init_stop = close_price + (atr * atr_mult)
+                    open_trades.append({
+                        "side": "SHORT",
+                        "entry_time": current_time,
+                        "entry_price": close_price,
+                        "entry_prob_unsafe": prob,
+                        "entry_class": 1,
+                        "lowest_low": close_price,
+                        "stop_price": init_stop, # [MODIFIED v1.8.2] Init Stop
+                    })
 
-                 # Check if we already have a trade for this layer?
-                 # Or just count trades? "Pyramiding" usually means one trade per layer.
-                 # Let's count current trades on this side.
-                 current_side_trades = [t for t in open_trades if t["side"] == ("LONG" if to_long else "SHORT")]
-                 current_count = len(current_side_trades)
-                 
-                 # Logic: If current_count <= target_layer_idx, it means we haven't filled this deep yet?
-                 # Example: price drops to -2.5 ATR (Step=1). Target Layer = 2 (0, 1, 2).
-                 # We should have 3 trades (L0, L1, L2).
-                 # If we have 2, we need to add 1.
-                 # Wait, this logic assumes we fill L0, then L1, then L2 sequentially.
-                 # If price gaps to L2 instantly, do we fill L0 and L1?
-                 # Simpler logic: "Max Open Trades" vs "Target Layer".
-                 # If target_layer_idx >= current_count:
-                 #    Enter NEW trade.
-                 #    (This assumes one trade per layer)
-                 
-                 if current_count <= target_layer_idx and current_count < max_layers:
-                     # Check Global Max Trades
-                     max_open = getattr(indicator_params, "max_open_trades", 5) if indicator_params else 5
-                     if len(open_trades) < max_open: # Default 5 or 10
-                         # ENTER
-                         side = "LONG" if to_long else "SHORT"
-                         new_trade = {
-                             "side": side,
-                             "entry_time": current_time,
-                             "entry_price": close_price,
-                             "entry_expected_return": expected_ret,
-                             "entry_class": pred_class,
-                             "entry_zscore": dev_atr,
-                             "target_price": None, # TP is dynamic MA
-                         }
-                         open_trades.append(new_trade)
-
-    # 4. Clean up remaining trades at end of data
+    # Cleanup Exit
     if open_trades:
         last_row = frame.iloc[-1]
-        last_ts: pd.Timestamp = last_row["timestamp"]
+        last_ts = last_row["timestamp"]
         last_price = float(last_row["close"])
-        
-        for trade in open_trades:
-            side = trade["side"]
-            if side == "LONG":
-                ret = (last_price - trade["entry_price"]) / trade["entry_price"]
-            else:
-                ret = (trade["entry_price"] - last_price) / trade["entry_price"]
-                
-            if transaction_cost:
-                ret -= transaction_cost
-                
-            delta = pd.to_datetime(last_ts, utc=True) - pd.to_datetime(trade["entry_time"], utc=True)
-            holding_minutes = max(delta.total_seconds() / 60.0, 0.0)
-            records.append(
-                {
-                    "side": side,
-                    "entry_time": trade["entry_time"],
-                    "exit_time": last_ts,
-                    "entry_price": trade["entry_price"],
-                    "exit_price": last_price,
-                    "return": ret,
-                    "holding_mins": holding_minutes,
-                    "entry_expected_return": trade["entry_expected_return"],
-                    "exit_expected_return": float(last_row["expected_return_sim"]),
-                    "entry_class": trade["entry_class"],
-                    "exit_class": float(last_row["predicted_class_sim"]),
-                    "exit_reason": "end_of_data",
-                    "entry_zscore": trade.get("entry_zscore", 0.0),
-                    "exit_zscore": float(last_row["expected_return_sim"]),
-                }
-            )
+        for t in open_trades:
+            side = t["side"]
+            ret = (last_price - t["entry_price"]) / t["entry_price"] if side == "LONG" else (t["entry_price"] - last_price) / t["entry_price"]
+            if transaction_cost: ret -= transaction_cost
+            
+            records.append({
+                "side": side,
+                "entry_time": t["entry_time"],
+                "exit_time": last_ts,
+                "entry_price": t["entry_price"],
+                "exit_price": last_price,
+                "return": ret,
+                "holding_mins": 0.0,
+                "entry_prob_unsafe": t["entry_prob_unsafe"],
+                "exit_prob_unsafe": 0.0,
+                "entry_class": t["entry_class"],
+                "exit_class": 0,
+                "exit_reason": "end_of_data",
+                "entry_zscore": t.get("entry_zscore", 0.0),
+                "exit_zscore": 0.0,
+            })
 
-    trades = pd.DataFrame.from_records(records, columns=trade_columns)
-    if trades.empty:
-        return trades
-
-    trades["entry_zscore"] = trades["entry_zscore"].fillna(0.0)
-    trades["exit_zscore"] = trades["exit_zscore"].fillna(0.0)
-    return trades
+    return pd.DataFrame.from_records(records, columns=trade_columns)
 
 
 def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
@@ -667,16 +570,27 @@ def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
             summary[f"{key}_trades"] = float(len(side_returns))
             summary[f"{key}_total_return"] = float(np.prod(1.0 + side_returns) - 1.0)
             summary[f"{key}_win_rate"] = float((side_returns > 0).mean())
+            
+            # Use new column name, fallback to old if missing
+            col_name = "entry_prob_unsafe" if "entry_prob_unsafe" in trades.columns else "entry_expected_return"
             expected_series = pd.to_numeric(
-                trades.loc[mask, "entry_expected_return"], errors="coerce"
+                trades.loc[mask, col_name], errors="coerce"
             ).dropna()
-            summary[f"mean_expected_{key}"] = (
+            
+            # Rename metric to mean_prob_unsafe_{key} if it is prob_unsafe?
+            # For compatibility with report, might want to keep keys or add new ones.
+            # Let's add new ones and keep old one as 0 or Alias?
+            # Report usually iterates metrics.
+            summary[f"mean_prob_unsafe_{key}"] = (
                 float(expected_series.mean()) if not expected_series.empty else 0.0
             )
+            # Legacy key fill (optional)
+            summary[f"mean_expected_{key}"] = summary[f"mean_prob_unsafe_{key}"]
         else:
             summary[f"{key}_trades"] = 0.0
             summary[f"{key}_total_return"] = 0.0
             summary[f"{key}_win_rate"] = 0.0
+            summary[f"mean_prob_unsafe_{key}"] = 0.0
             summary[f"mean_expected_{key}"] = 0.0
 
     return summary
@@ -777,41 +691,69 @@ def _evaluate(
     if df.empty:
         metrics = {
             "accuracy": 0.0,
-            "mae_expected": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
             "threshold": float(params.decision_threshold),
         }
         metrics.update(_summarize_trades(pd.DataFrame()))
         metrics["score"] = 0.0
         return metrics
 
-    expected_returns = _expected_returns(probs, class_means)
-    preds_idx = np.argmax(probs, axis=1)
-    pred_classes = CLASS_VALUES[preds_idx]
+    # Probs is [N, 2] usually. We want Prob(Unsafe) = Prob(1)
+    # If using LightGBM multiclass=2, it returns [Prob0, Prob1].
+    prob_unsafe = probs[:, 1]
+    
+    # Predict based on Decision Threshold
+    preds = (prob_unsafe > params.decision_threshold).astype(int)
     y_true = df[TARGET_COLUMN].to_numpy()
-    accuracy = float(accuracy_score(y_true, pred_classes))
-    mae_expected = float(
-        mean_absolute_error(df["future_short_return"], expected_returns)
-    )
-
+    
+    from sklearn.metrics import accuracy_score, precision_score, recall_score
+    accuracy = float(accuracy_score(y_true, preds))
+    
+    # Binary Metrics (Positive Class = Unsafe)
+    # True Positive = Predicted Unsafe AND Is Unsafe (Good detection)
+    # False Negative = Predicted Safe BUT Is Unsafe (Missed Trend -> Disaster)
+    # False Positive = Predicted Unsafe BUT Is Safe (False Alarm -> Opportunity Cost)
+    
+    precision = float(precision_score(y_true, preds, zero_division=0))
+    recall = float(recall_score(y_true, preds, zero_division=0))
+    
+    # Simulation
+    # Pass Prob(Unsafe) as expected_returns for sim function convention
     trades = _simulate_trades(
         df,
-        expected_returns,
-        pred_classes,
+        prob_unsafe,
+        preds,
         params,
         indicator_params=indicator_params,
         transaction_cost=transaction_cost,
         stop_loss_pct=stop_loss_pct,
         min_hold_bars=min_hold_bars,
     )
-    summary = _summarize_trades(trades)
-
+    metric_summary = _summarize_trades(trades)
+    
     metrics = {
         "accuracy": accuracy,
-        "mae_expected": mae_expected,
+        "precision": precision,
+        "recall": recall, 
         "threshold": float(params.decision_threshold),
     }
-    metrics.update(summary)
-    metrics["score"] = metrics.get("total_return", 0.0)
+    metrics.update(metric_summary)
+    
+    # Score Calculation: Focus on Avoiding Disaster (Min Drawdown) + Profit
+    # High Recall is good (Caught all unsafe moments).
+    # But ultimate test is PnL / Drawdown.
+    
+    total_return = metric_summary["total_return"]
+    max_dd = metric_summary["max_drawdown"]
+    
+    # Score: Calmar Ratio-ish
+    if max_dd > 0:
+        score = total_return / (max_dd * 2.0) # Penalize DD more
+    else:
+        score = total_return
+        
+    metrics["score"] = score
     return metrics
 
 
@@ -830,50 +772,42 @@ def _evaluate_vectorized(
     if df.empty:
         return {"score": 0.0, "total_return": 0.0, "trades": 0.0}
 
-    expected_returns = _expected_returns(probs, class_means)
-    preds_idx = np.argmax(probs, axis=1)
-    pred_classes = CLASS_VALUES[preds_idx]
+    # [FIXED V1.6.6] Safety Filter Vectorized Logic
+    # The model predicts prob_unsafe (Class 1).
+    # If prob_unsafe < threshold -> SAFE -> We assume we hold the asset (Long).
+    # If prob_unsafe >= threshold -> UNSAFE -> We go to Cash (0 return).
+    # This rewards the model for avoiding large drawdowns (when future_long_return is negative)
+    # and punishes it for missing rallies (when future_long_return is positive).
     
-    # Vectorized PnL calculation
-    # If pred=2 (Long) -> future_long_return
-    # If pred=-2 (Short) -> future_short_return
-    # Else 0
-    
+    prob_unsafe = probs[:, 1]
     threshold = float(params.decision_threshold)
     
-    # Filter by threshold
-    # Note: In _simulate_trades, we only open if expected_ret >= threshold
-    # Here we approximate: if abs(expected_ret) >= threshold? 
-    # Or just rely on class prediction? 
-    # _simulate_trades logic: if expected_ret >= threshold: check class.
+    # Logic: Safe vs Unsafe
+    # Note: We use 'future_long_return' as the proxy for holding the asset.
+    # Ideally we'd know the trend, but for random split validation, Long Bias Proxy is standard for Crypto.
     
-    # Let's match _simulate_trades logic roughly
-    mask_long = (pred_classes == 1.0) & (expected_returns >= threshold)
-    mask_short = (pred_classes == -1.0) & (expected_returns >= threshold)
+    is_safe = prob_unsafe < threshold
     
     pnl = np.zeros(len(df))
     
-    # Long returns
-    if mask_long.any():
-        pnl[mask_long] = df.loc[mask_long, "future_long_return"].fillna(0.0) - transaction_cost
-        
-    # Short returns
-    if mask_short.any():
-        pnl[mask_short] = df.loc[mask_short, "future_short_return"].fillna(0.0) - transaction_cost
-        
-    # Total Return (Geometric)
-    # 1 + r1 * 1 + r2 ... - 1
+    # If Safe, we take the market return (minus transaction cost if we were re-entering, but let's ignore freq trading here)
+    # Strictly for Optuna scoring:
+    pnl[is_safe] = df.loc[is_safe, "future_long_return"].fillna(0.0)
+    
+    # If Unsafe, pnl is 0.0 (Cash)
+    
+    # Total Return
     total_return = np.prod(1.0 + pnl) - 1.0
     
-    trades_count = mask_long.sum() + mask_short.sum()
-    win_rate = (pnl > 0).mean() if trades_count > 0 else 0.0
+    trades_count = len(df) # N/A really
+    win_rate = (pnl > 0).mean()
     
     return {
         "score": float(total_return),
         "total_return": float(total_return),
         "trades": float(trades_count),
         "win_rate": float(win_rate),
-        "avg_return": float(pnl[pnl != 0].mean()) if trades_count > 0 else 0.0,
+        "avg_return": float(pnl.mean()),
         "threshold": threshold,
     }
 

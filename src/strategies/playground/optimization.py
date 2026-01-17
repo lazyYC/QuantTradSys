@@ -140,9 +140,12 @@ def optimize_playground(
         best_seed: int | None = None
 
         for seed_val in seeds:
-            # Random Split: 1/11 for validation, 10/11 for training
+            # [MODIFIED v1.8.4] Incentive Alignment
+            # Switch to Time-Series Split (shuffle=False) so we can run
+            # the fast path-dependent simulation (_simulate_trades) for validation.
+            # Random split breaks trailing stop logic.
             train_ds, valid_ds = train_test_split(
-                dataset, test_size=1/11, random_state=seed_val, shuffle=True
+                dataset, test_size=0.15, shuffle=False
             )
             
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -153,14 +156,14 @@ def optimize_playground(
                         model_candidates=[model_params],
                         model_dir=Path(tmpdir),
                         valid_dataset=valid_ds,
-                        valid_days=0, # Disable time-based split
+                        valid_days=0, # Disable time-based split (we handled it)
                         transaction_cost=transaction_cost,
                         min_validation_days=0,
                         stop_loss_pct=stop_loss_pct,
                         use_gpu=use_gpu,
                         seed=seed_val,
                         deterministic=True,
-                        use_vectorized_metrics=True, # Random split requires vectorized eval
+                        use_vectorized_metrics=False, # [MODIFIED] Use Real Simulation!
                     )
                 except ValueError as exc:
                     raise optuna.TrialPruned(str(exc)) from exc
@@ -452,13 +455,14 @@ def suggest_indicator_params(
     )
     
     # Optimize Target Parameters
-    # future_window: 1h to 4h (12 to 48 bars of 5m)
-    params["future_window"] = trial.suggest_int("future_window", 12, 60, step=12)
+    # future_window: 1h to 3h (12 to 36 bars of 5m) - Narrowed to avoid noise
+    params["future_window"] = trial.suggest_int("future_window", 12, 36, step=6)
     
-    # future_return_threshold: 0.1% to 0.5% (Relaxed from 0.01)
-    # Since we use Dynamic Target, this is the MINIMUM distance to consider.
+    # future_return_threshold: 1.5% to 3.0%
+    # [MODIFIED v1.8.1] User feedback: Target "True" volatility (Big Moves).
+    # If set too low, we catch noise.
     params["future_return_threshold"] = trial.suggest_float(
-        "future_return_threshold", 0.005, 0.01, step=0.001
+        "future_return_threshold", 0.015, 0.030, step=0.002
     )
 
     # Fixed Parameters for Momentum/Volatility
@@ -470,21 +474,20 @@ def suggest_indicator_params(
         "macd_signal": 9,
         "bb_window": 20,
         "bb_std": 2.0,
-        "max_open_trades": 25,  # Increased for deep grid
-        "max_global_drawdown_pct": 0.10, # Relaxed for grid holding (10%)
+        "max_open_trades": 1,  # Single Bullet Strategy
+        "max_global_drawdown_pct": 0.05,
         "require_candle_confirmation": False, 
-        # Grid Params (Optimized)
     })
     
-    # Grid Optimization
-    params["grid_step_atr"] = trial.suggest_float("grid_step_atr", 0.3, 1.5, step=0.1)
-    params["max_grid_layers"] = trial.suggest_int("max_grid_layers", 5, 20, step=5)
-    params["eject_threshold"] = trial.suggest_float("eject_threshold", 0.35, 0.48, step=0.01)
+    # v1.8.0 Volatility Breakout Optimization
+    params["breakout_window"] = trial.suggest_int("breakout_window", 20, 100, step=10)
+    params["atr_trailing_mult"] = trial.suggest_float("atr_trailing_mult", 2.0, 6.0, step=0.5)
+    params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.5, 0.85, step=0.05)
     
-    # Optimize ADX Threshold - Stricter Range (Avoid High ADX entirely)
-    params["adx_threshold"] = trial.suggest_int("adx_threshold", 40, 60, step=5) # Grid needs room to breathe, so allow higher volatility? No, we eject on High Trend. So Threshold is "Safe Zone".
-    # User said: "Eject if ADX > 50". So safe zone is < 50.
-    # Let's optimize the Cutoff.
+    # ADX Threshold - We want Strong Trends?
+    # Actually for breakout, maybe we ignore ADX or use it to filter chop?
+    # Let's optimize it as a minimum requirement for breakout.
+    params["adx_threshold"] = trial.suggest_int("adx_threshold", 15, 40, step=5) # Trend Strength > X
 
     return StarIndicatorParams(**params)
 
