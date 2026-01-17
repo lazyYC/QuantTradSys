@@ -35,9 +35,25 @@ def build_training_dataset(
                 if count > 0:
                     weight = total / (n_classes * count)
                     df.loc[df[TARGET_COLUMN] == cls, SAMPLE_WEIGHT_COLUMN] = weight
-    if min_abs_future_return and min_abs_future_return > 0:
-        mask = df["future_long_return"].abs() >= float(min_abs_future_return)
-        df = df[mask].reset_index(drop=True)
+                    
+    # 3. Apply Return-Based Weighting (Intensity Multiplier)
+    # Goal: Prioritize high-volatility events (where model must be correct to avoid ruin/capture profit).
+    if "max_upside" in df.columns and "max_downside" in df.columns:
+        intensity = df[["max_upside", "max_downside"]].max(axis=1)
+        avg_intensity = intensity.mean()
+        if avg_intensity > 0:
+            # Multiplier: 0.5 (Base) + 1.5 * (Intensity / Avg)
+            # This means average intensity gets 2.0x weight, low intensity gets 0.5x.
+            # Effectively shifting focus to "Active" periods.
+            multiplier = 0.5 + 1.5 * (intensity / avg_intensity)
+            df[SAMPLE_WEIGHT_COLUMN] *= multiplier
+
+    # [FIXED] Do NOT filter out low volatility rows here.
+    # The whole point of the model is to distinguish between Low Vol (Safe) and High Vol (Unsafe).
+    # If we remove Low Vol rows, the model only sees High Vol rows (Class 1) and learns nothing.
+    # if min_abs_future_return and min_abs_future_return > 0:
+    #     mask = df["future_long_return"].abs() >= float(min_abs_future_return)
+    #     df = df[mask].reset_index(drop=True)
     df["q10"] = class_thresholds.get("q10", 0.0)
     df["q25"] = class_thresholds.get("q25", 0.0)
     df["q75"] = class_thresholds.get("q75", 0.0)
@@ -121,6 +137,9 @@ def list_feature_columns(dataset: pd.DataFrame) -> List[str]:
         TARGET_COLUMN,
         SAMPLE_WEIGHT_COLUMN,
         "future_close_return",
+        "future_return", # [FIXED v1.8.6] Critical Leakage Fix
+        "max_upside",     # [FIXED v1.8.6] Critical Leakage Fix
+        "max_downside",   # [FIXED v1.8.6] Critical Leakage Fix
         "future_min_return",
         "future_short_return",
         "future_best_short_return",
