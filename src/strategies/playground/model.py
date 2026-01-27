@@ -150,6 +150,27 @@ def train_star_model(
         sample_weight=train_df[SAMPLE_WEIGHT_COLUMN],
         eval_set=None,
     )
+
+    # === FEATURE IMPORTANCE LOGGING ===
+    try:
+        # Use Gain (Total Info Gain) to identify useful vs useless features
+        importances = final_model.booster_.feature_importance(importance_type='gain')
+        imp_df = pd.DataFrame({
+            'feature': feature_cols,
+            'gain': importances
+        }).sort_values(by='gain', ascending=False)
+
+        print("\n" + "="*50)
+        print("LIGHTGBM FEATURE IMPORTANCE (GAIN) - TOP 20")
+        print("="*50)
+        print(imp_df.head(20).to_string(index=False))
+        print("-" * 50)
+        print("BOTTOM 10 (POTENTIAL CANDIDATES FOR REMOVAL)")
+        print(imp_df.tail(10).to_string(index=False))
+        print("="*50 + "\n")
+    except Exception as e:
+        print(f"[WARNING] Could not print feature importance: {e}")
+    # ==================================
     train_probs = (
         final_model.predict_proba(train_df[feature_cols])
         if not train_df.empty
@@ -318,14 +339,24 @@ def _simulate_trades(
         body_ratio_max=0.3, volume_ratio_max=0.6, future_window=12, future_return_threshold=0.01
     )
     
-    breakout_window = getattr(ind_params, "breakout_window", 20)
     atr_mult = getattr(ind_params, "atr_trailing_mult", 3.0)
     trigger_thresh = getattr(ind_params, "trigger_threshold", 0.6)
     
-    # Calculate Donchian Channel (Shifted by 1 to avoid lookahead bias on High/Low)
-    # We want breakout of *previous* N bars high/low.
-    frame["donchian_high"] = frame["high"].rolling(breakout_window).max().shift(1)
-    frame["donchian_low"] = frame["low"].rolling(breakout_window).min().shift(1)
+    # Calculate Bollinger Bands (Shifted by 1 to avoid lookahead)
+    # Using small window for fast reaction (e.g., 20)
+    bb_window = getattr(ind_params, "bb_window", 20)
+    bb_std = getattr(ind_params, "bb_std", 2.0)
+    
+    roll_mean = frame["close"].rolling(bb_window).mean().shift(1)
+    roll_std = frame["close"].rolling(bb_window).std(ddof=0).shift(1)
+    
+    frame["bb_upper"] = roll_mean + (roll_std * bb_std)
+    frame["bb_lower"] = roll_mean - (roll_std * bb_std)
+    
+    # Donchian Channel (Backup High/Low for stop loss reference?) 
+    # Actually for stop loss we use ATR or Monotonic.
+    # We can keep Donchian just in case or remove if unused. 
+    # Let's remove Donchian to cleaner logic.
     
     # ATR Calculation (v1.8.0)
     if "atr" not in frame.columns:
@@ -342,10 +373,31 @@ def _simulate_trades(
     closes = frame["close"].values
     highs = frame["high"].values
     lows = frame["low"].values
-    donchian_highs = frame["donchian_high"].values
-    donchian_lows = frame["donchian_low"].values
+    bb_uppers = frame["bb_upper"].values
+    bb_lowers = frame["bb_lower"].values
     probs = frame["prob_unsafe"].values
     atrs = frame["atr"].values
+    
+    # --- Feature Extraction for Filters ---
+    trend_ema_window = getattr(ind_params, "trend_ema_window", 200)
+    adx_min = getattr(ind_params, "adx_min", 0.0)
+    
+    # Pre-calculate Trend EMA
+    trend_ema = frame["close"].ewm(span=trend_ema_window, adjust=False).mean().values
+    
+    # ADX extraction
+    if "adx" in frame.columns:
+        adx_values = frame["adx"].values
+    else:
+        adx_values = np.zeros(len(closes))
+        
+    # Volume Force extraction
+    if "volume_force" in frame.columns and "volume_force_ma" in frame.columns:
+        vol_force = frame["volume_force"].values
+        vol_force_ma = frame["volume_force_ma"].values
+    else:
+        vol_force = np.zeros(len(closes))
+        vol_force_ma = np.zeros(len(closes))
     
     max_open = ind_params.max_open_trades
 
@@ -355,8 +407,8 @@ def _simulate_trades(
         close_price = closes[i]
         high_price = highs[i]
         low_price = lows[i]
-        dh = donchian_highs[i]
-        dl = donchian_lows[i]
+        dh = bb_uppers[i] # Alias for consistency
+        dl = bb_lowers[i] # Alias for consistency
         prob = probs[i]
         atr = atrs[i]
         
@@ -450,14 +502,41 @@ def _simulate_trades(
         # Trigger Condition: AI says "Unsafe" (High Volatility Incoming)
         if prob > trigger_thresh:
             
-            # Action Condition: Breakout
+            # --- Hard Filters Check ---
             
-            # Long Breakout
+            # 1. ADX Filter (Avoid Choppy "Breakouts")
+            if adx_values[i] < adx_min:
+                continue
+                
+            # 2. Trend Alignment (Long only if > EMA, Short only if < EMA)
+            trend_ok_long = True
+            trend_ok_short = True
+            if getattr(ind_params, "require_trend_alignment", False):
+                trend_val = trend_ema[i]
+                if close_price < trend_val:
+                    trend_ok_long = False
+                if close_price > trend_val:
+                    trend_ok_short = False
+            
+            # 3. Volume Confirmation (Volume Force > Avg)
+            vol_ok_long = True
+            vol_ok_short = True
+            if getattr(ind_params, "volume_confirmation", False):
+                vf = vol_force[i]
+                vf_ma = abs(vol_force_ma[i])
+                if vf <= 0: vol_ok_long = False
+                if vf >= 0: vol_ok_short = False
+
+            # Action Condition: Bollinger Band Breakout
+            # DH/DL are now BB Upper/Lower
+            
+            # Long Breakout (Close > BB Upper)
             if close_price > dh and not np.isnan(dh):
-                # Check if we already have a long
+                if not trend_ok_long or not vol_ok_long:
+                    continue
+                    
                 has_long = any(t["side"] == "LONG" for t in open_trades)
                 if not has_long:
-                    # Init initial stop
                     init_stop = close_price - (atr * atr_mult)
                     open_trades.append({
                         "side": "LONG",
@@ -469,9 +548,11 @@ def _simulate_trades(
                         "stop_price": init_stop,
                     })
             
-            # Short Breakout
+            # Short Breakout (Close < BB Lower)
             elif close_price < dl and not np.isnan(dl):
-                # Check if we already have a short
+                if not trend_ok_short or not vol_ok_short:
+                    continue
+                    
                 has_short = any(t["side"] == "SHORT" for t in open_trades)
                 if not has_short:
                     init_stop = close_price + (atr * atr_mult)

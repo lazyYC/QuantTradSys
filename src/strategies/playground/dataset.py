@@ -45,7 +45,7 @@ def build_training_dataset(
             # Multiplier: 0.5 (Base) + 1.5 * (Intensity / Avg)
             # This means average intensity gets 2.0x weight, low intensity gets 0.5x.
             # Effectively shifting focus to "Active" periods.
-            multiplier = 0.5 + 1.5 * (intensity / avg_intensity)
+            multiplier = 0.5 + 3 * (intensity / avg_intensity)
             df[SAMPLE_WEIGHT_COLUMN] *= multiplier
 
     # [FIXED] Do NOT filter out low volatility rows here.

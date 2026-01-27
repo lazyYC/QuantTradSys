@@ -29,6 +29,10 @@ class StarIndicatorParams:
     macd_fast: int = 12
     macd_slow: int = 26
     macd_signal: int = 9
+    rsi_window: int = 14
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
     bb_window: int = 20
     bb_std: float = 2.0
     stop_loss_pct: Optional[float] = None
@@ -42,7 +46,14 @@ class StarIndicatorParams:
     # v1.8.0 Volatility Breakout Controls
     breakout_window: int = 20      # Lookback for Donchian Channel
     atr_trailing_mult: float = 3.0 # Multiplier for ATR Trailing Stop
+    atr_trailing_mult: float = 3.0 # Multiplier for ATR Trailing Stop
     trigger_threshold: float = 0.6 # Prob(Unsafe) to trigger Breakout Mode
+    
+    # v1.8.5 Logic Hard-Filters
+    trend_ema_window: int = 200
+    require_trend_alignment: bool = False
+    adx_min: float = 0.0 # 20.0 to enable
+    volume_confirmation: bool = False
     
  
 

@@ -238,6 +238,17 @@ class StarFeatureCache:
         # Let's use 14 as standard.
         frame["adx"] = _compute_adx(high, low, close, 14)
         
+        # 8.5 Volume Force (Buying vs Selling Pressure)
+        # CMF-style calculation: Close Location Value * Volume
+        try:
+            clv = ((close - low) - (high - close)) / (high - low)
+            clv = clv.fillna(0.0) # Handle 0 range
+        except Exception:
+            clv = 0.0
+        
+        frame["volume_force"] = clv * volume
+        frame["volume_force_ma"] = frame["volume_force"].rolling(window=params.volume_window).mean()
+
         # --- NEW FEATURES END ---
 
 
@@ -260,7 +271,16 @@ class StarFeatureCache:
         frame = frame.drop(
             columns=[
                 "rolling_high", "rolling_low", "atr", "volume", 
-                "log_return_1", "log_return_5"
+                "log_return_1", "log_return_5",
+                # Pruned based on Gain Analysis (v1.8.6)
+                "upper_shadow_ratio", "lower_shadow_ratio",
+                "close_rel_lag1", "close_rel_lag2", "close_rel_lag3", "close_rel_lag4", "close_rel_lag5",
+                "dist_ma_5", "return_3", "close_rel", "return_1", "body_direction",
+                # "volume_force" # Keeping volume_force for now as MA uses it, but maybe drop raw? 
+                # User asked to delete "last five", volume_force was raw, but MA is useful.
+                # Actually, if I drop it here, model won't see it.
+                # The user saw "volume_force" (raw) in Bottom 10.
+                "volume_force" 
             ],
             errors="ignore",
         )

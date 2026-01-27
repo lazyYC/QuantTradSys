@@ -205,30 +205,44 @@ def run_grid_search(
     LOGGER.info(f"Splits Prepared: Train={len(train_input)} (Core={len(train_raw)}), Valid={len(valid_input)} (Core={len(valid_raw)}), Test={len(test_input)} (Core={len(test_raw)})")
     
     # 7. Define Grid
-    triggers = [0.6, 0.60, 0.65, 0.70, 0.75, 0.8]
-    breakouts = [20, 30, 40, 50, 60, 80]
-    atr_mults = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+    # 7. Define Grid
+    triggers = [0.6, 0.70, 0.8] 
     
-    grid = list(itertools.product(triggers, breakouts, atr_mults))
+    # Replaced Breakouts with BB Std Devs
+    # breakouts = [40, 60] -> Not used
+    bb_stds = [1.8, 2.0, 2.2]
+    
+    atr_mults = [3.0, 4.0, 5.0]
+    
+    # New Filter Params
+    adx_mins = [20.0, 25.0]
+    trend_aligns = [True] # Force trend alignment for safety in chop
+    
+    grid = list(itertools.product(triggers, bb_stds, atr_mults, adx_mins, trend_aligns))
     results = []
     
-    LOGGER.info(f"Running Grid Search on {len(grid)} combinations...")
+    LOGGER.info(f"Running Grid Search (BB Breakout) on {len(grid)} combinations...")
     
-    for (trig, brk, atr_m) in tqdm(grid):
+    for (trig, bb_dev, atr_m, adx_m, t_align) in tqdm(grid):
         # We run simulation for each split
         
-        # Override params object using replace (since frozen=True)
+        # Override params object using replace
         current_ind_params = dataclasses.replace(
             indicator_params,
-            breakout_window=brk,
+            bb_std=bb_dev, # New
+            bb_window=20,  # Fixed
             atr_trailing_mult=atr_m,
-            trigger_threshold=trig
+            trigger_threshold=trig,
+            adx_min=adx_m,
+            require_trend_alignment=t_align
         )
         
         row = {
             "trigger_threshold": trig,
-            "breakout_window": brk,
+            "bb_std": bb_dev,
             "atr_trailing_mult": atr_m,
+            "adx_min": adx_m,
+            "require_trend_alignment": t_align,
         }
         
         for split_name, split_df, core_start in [
