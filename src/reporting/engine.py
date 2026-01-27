@@ -45,6 +45,7 @@ class ReportContext:
     
     # Override
     stop_loss_arg: Optional[str] = None
+    last_days: Optional[int] = None
 
     # Inferred/Loaded Metadata
     symbol: str = ""
@@ -84,6 +85,7 @@ class ReportEngine:
             start_ts=start_ts,
             end_ts=end_ts,
             stop_loss_arg=args.stop_loss_pct,
+            last_days=args.last_days,
         )
         return cls(ctx)
 
@@ -184,17 +186,75 @@ class ReportEngine:
 
     def _prepare_data(self) -> None:
         """Load OHLCV data with warmup buffering."""
-        # Load Candles
-        # We need warmup data for indicators (approx 60 days to be safe for 30-day patterns/windows)
-        warmup_days = 5 # Sufficient for 300-500 bars at 5m/15m
-        fetch_start = self.ctx.start_ts - pd.Timedelta(days=warmup_days) if self.ctx.start_ts else None
+        from data_pipeline.ccxt_fetcher import fetch_yearly_ohlcv
         
-        self.ctx.candles = self.market_store.load_candles(
+        # Smart Sync: Ensure data is fresh before loading
+        sync_days = self.ctx.last_days + 10 if self.ctx.last_days else 365
+        sync_days = max(sync_days, 60)
+        
+        LOGGER.info(f"Synchronizing market data for {self.ctx.symbol}...")
+        fetch_yearly_ohlcv(
             symbol=self.ctx.symbol,
             timeframe=self.ctx.timeframe,
-            start_ts=fetch_start,
-            end_ts=self.ctx.end_ts,
+            lookback_days=sync_days,
+            exchange_id="binanceusdm",
+            market_store=self.market_store
         )
+
+        # Load Candles
+        warmup_days = 5
+        
+        # [NEW] Precise Last Days Logic
+        if self.ctx.last_days and self.ctx.last_days > 0:
+            LOGGER.info(f"Using --last-days={self.ctx.last_days}. Resolving latest timestamp...")
+            # Query the latest timestamp for this symbol/tf
+            # MarketStore doesn't have a direct 'get_max_ts' method exposed efficiently maybe?
+            # We can load just the last 1 candle to check time.
+            # But load_candles needs start/end.
+            # Let's try to load a chunk (e.g. last 1 day relative to 'now' won't work if data is old).
+            # We can load ALL data (expensive) or assume data is recent. 
+            # Better approach: Load metadata from DB if possible. 
+            # Or just load the whole thing if typically < 1GB. 3 years 5m is ~300k rows. 
+            # 300k rows is fine for Pandas. 
+            # Let's do the simple thing: Load with current constraints (which might be None), find max, then slice.
+            
+            # Step 1: Load "All" (or what user detailed via start/end, but last_days overrides start)
+            # Actually, to be safe, let's load everything defined by end_ts (if any) or ALL.
+            # Then slice the tail.
+            
+            temp_candles = self.market_store.load_candles(
+                symbol=self.ctx.symbol,
+                timeframe=self.ctx.timeframe,
+                start_ts=None, # Load from beginning to ensure we find the true end
+                end_ts=self.ctx.end_ts # If user capped the end, respect it.
+            )
+            
+            if not temp_candles.empty:
+                max_ts = temp_candles["timestamp"].max()
+                calc_start = max_ts - pd.Timedelta(days=self.ctx.last_days)
+                
+                # Update Context
+                self.ctx.start_ts = calc_start
+                # self.ctx.end_ts = max_ts # Implicitly set
+                
+                LOGGER.info(f"Resolved Time Window: {calc_start} -> {max_ts} (Last {self.ctx.last_days} days)")
+                
+                # Apply Slice with Warmup
+                # We need data *before* calc_start for warmup.
+                fetch_start = calc_start - pd.Timedelta(days=warmup_days)
+                self.ctx.candles = temp_candles[temp_candles["timestamp"] >= fetch_start].copy()
+            else:
+                self.ctx.candles = temp_candles # Empty
+        
+        else:
+            # Standard Logic
+            fetch_start = self.ctx.start_ts - pd.Timedelta(days=warmup_days) if self.ctx.start_ts else None
+            self.ctx.candles = self.market_store.load_candles(
+                symbol=self.ctx.symbol,
+                timeframe=self.ctx.timeframe,
+                start_ts=fetch_start,
+                end_ts=self.ctx.end_ts,
+            )
         if self.ctx.candles.empty:
             LOGGER.error(f"No OHLCV data found for {self.ctx.symbol} {self.ctx.timeframe}.")
             sys.exit(1)
@@ -214,6 +274,11 @@ class ReportEngine:
             sys.exit(1)
 
 
+        self.ctx.params["trigger_threshold"] = 0.6
+        self.ctx.params["bb_std"] = 1.8
+        self.ctx.params["atr_trailing_mult"] = 3
+        self.ctx.params["adx_min"] = 20
+        self.ctx.params["require_trend_alignment"] = True
             
         # Run Backtest with core_start to trim warmup from results
         result = self.strategy_instance.backtest(
@@ -458,8 +523,8 @@ class ReportEngine:
             
             # Create Navigation Links for Times
             # Entry Time Link
-            t_df["ts_entry"] = pd.to_datetime(t_df["entry_time"]).astype('int64') // 10**9
-            t_df["entry_time_display"] = pd.to_datetime(t_df["entry_time"]).dt.strftime("%Y-%m-%d %H:%M")
+            t_df["ts_entry"] = pd.to_datetime(t_df["entry_time"], utc=True).astype('int64') // 10**9
+            t_df["entry_time_display"] = pd.to_datetime(t_df["entry_time"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
             t_df["entry_time"] = t_df.apply(
                 lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_entry']})'>{row['entry_time_display']}</span>", 
                 axis=1
@@ -467,8 +532,8 @@ class ReportEngine:
             
             # Exit Time Link
             if "exit_time" in t_df.columns:
-                t_df["ts_exit"] = pd.to_datetime(t_df["exit_time"]).astype('int64') // 10**9
-                t_df["exit_time_display"] = pd.to_datetime(t_df["exit_time"]).dt.strftime("%Y-%m-%d %H:%M")
+                t_df["ts_exit"] = pd.to_datetime(t_df["exit_time"], utc=True).astype('int64') // 10**9
+                t_df["exit_time_display"] = pd.to_datetime(t_df["exit_time"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
                 t_df["exit_time"] = t_df.apply(
                     lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_exit']})'>{row['exit_time_display']}</span>", 
                     axis=1

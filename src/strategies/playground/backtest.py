@@ -93,11 +93,7 @@ def backtest_star_xgb(
     core_start_ts: Optional[pd.Timestamp] = None
     if core_start is not None:
         core_start_ts = pd.to_datetime(core_start, utc=True, errors="coerce")
-        if pd.notna(core_start_ts):
-            dataset = dataset[dataset["timestamp"] >= core_start_ts].reset_index(
-                drop=True
-            )
-    if dataset.empty:
+
         return StarBacktestResult(
             trades=pd.DataFrame(),
             metrics={},
