@@ -6,6 +6,8 @@ star_xgb 為核心的加密量化策略專案，涵蓋資料擷取、Optuna 調�
 
 ```
 QuantTradSys/
+├── ALPHA_RESEARCH_UPDATE_20260126.md # 最新研究報告: 解決回測差異與參數敏感度
+├── ALPHA_RESEARCH_UPDATE_20260118.md # 研究報告: 策略轉向 Breakout
 ├── scripts/                  # CLI Entry Points
 │   ├── backfill_ohlcv.py     # 歷史資料回補 (CCXT -> Postgres)
 │   ├── train.py              # 策略訓練與最佳化 (Training Engine)
