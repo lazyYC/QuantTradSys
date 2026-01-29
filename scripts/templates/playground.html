@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strategy Playground</title>
+    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            margin: 0;
+            display: block;
+            /* Remove flex, allow scroll */
+            overflow-y: auto;
+            /* Enable scroll */
+            position: relative;
+        }
+
+        /* Sidebar Controls */
+        .sidebar {
+            width: 320px;
+            background-color: #252526;
+            padding: 20px;
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+
+            position: fixed;
+            /* Fixed left */
+            top: 0;
+            bottom: 0;
+            left: 0;
+            z-index: 1000;
+            overflow-y: auto;
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar.collapsed {
+            transform: translateX(-100%);
+        }
+
+        /* Main Content */
+        .main {
+            margin-left: 320px;
+            /* Space for sidebar */
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 20px;
+            transition: margin-left 0.3s ease;
+            min-height: 100vh;
+        }
+
+        .main.expanded {
+            margin-left: 0;
+        }
+
+        #chart-container {
+            height: 600px;
+            /* Fixed height for chart */
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        /* Toggle Button */
+        #toggle-btn {
+            position: fixed;
+            top: 15px;
+            left: 335px;
+            /* Sidebar width + gap */
+            z-index: 1001;
+            background-color: #0e639c;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: left 0.3s ease;
+            opacity: 0.8;
+        }
+
+        #toggle-btn:hover {
+            opacity: 1;
+        }
+
+        .sidebar.collapsed~#toggle-btn {
+            left: 15px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* Checkbox styling */
+        .checkbox-group {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .checkbox-group input {
+            width: auto;
+        }
+
+        /* --- Report CSS (Copied from tradingview_report.html) --- */
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #d1d4dc;
+            margin-bottom: 15px;
+            border-left: 4px solid #2962FF;
+            padding-left: 10px;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 30px;
+            background: #1e222d;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .data-table th,
+        .data-table td {
+            border: 1px solid #444;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .data-table th {
+            background-color: #333;
+            position: sticky;
+            top: 0;
+        }
+
+        .data-table tr:nth-child(even) {
+            background-color: #262626;
+        }
+
+        .data-table tr:hover {
+            background-color: #333;
+        }
+
+        .time-link {
+            color: #4fc3f7;
+            text-decoration: none;
+            cursor: pointer;
+            border-bottom: 1px dashed #4fc3f7;
+        }
+
+        .time-link:hover {
+            color: #81d4fa;
+            border-bottom-style: solid;
+        }
+
+        h3 {
+            color: #d1d4dc;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <h2>Parameters</h2>
+        <div class="control-group">
+            <label>Trigger Threshold (VolScore) <span id="val-trigger" class="value-display">{{
+                    defaults.trigger_threshold }}</span></label>
+            <input type="range" id="trigger_threshold" min="0.1" max="0.95" step="0.05"
+                value="{{ defaults.trigger_threshold }}">
+        </div>
+        <div class="control-group">
+            <label>Bollinger Band Std <span id="val-bb" class="value-display">{{ defaults.bb_std }}</span></label>
+            <input type="range" id="bb_std" min="1.0" max="4.0" step="0.1" value="{{ defaults.bb_std }}">
+        </div>
+        <div class="control-group">
+            <label>ATR Trailing Mult <span id="val-atr" class="value-display">{{ defaults.atr_trailing_mult
+                    }}</span></label>
+            <input type="range" id="atr_trailing_mult" min="1.0" max="6.0" step="0.5"
+                value="{{ defaults.atr_trailing_mult }}">
+        </div>
+        <div class="control-group">
+            <label>ADX Min <span id="val-adx" class="value-display">{{ defaults.adx_min }}</span></label>
+            <input type="range" id="adx_min" min="0" max="50" step="5" value="{{ defaults.adx_min }}">
+        </div>
+        <div class="control-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="require_trend_alignment" checked>
+                <label for="require_trend_alignment" style="margin:0; color:#e0e0e0;">Require Trend Alignment</label>
+            </div>
+        </div>
+        <button id="run-btn">Run Simulation</button>
+        <div id="status" style="font-size: 11px; color: #888; margin-top: auto;">Ready</div>
+    </div>
+
+    <button id="toggle-btn">☰</button>
+
+    <div class="main">
+        <div id="chart-container"></div>
+
+        <!-- Table Containers: Stacked Layout -->
+        <div class="tables-container"
+            style="overflow-y: manual; display: flex; flex-direction: column; gap: 30px; max-width: 1200px; margin: 0 auto; width: 100%;">
+            <div id="metrics-section">
+                <h3>Performance Metrics</h3>
+                <div id="metrics-container"></div>
+            </div>
+
+            <div id="dist-section">
+                <h3>Trade Distribution</h3>
+                <div id="dist-container"></div>
+            </div>
+
+            <div id="analysis-section">
+                <h3>Analysis</h3>
+                <div id="analysis-container"></div>
+            </div>
+
+            <div id="trades-section">
+                <h3>Trade List</h3>
+                <div id="trades-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Chart Setup (Stacked Layout) ---
+        const chartContainer = document.getElementById('chart-container');
+        const chart = LightweightCharts.createChart(chartContainer, {
+            layout: {
+                backgroundColor: '#1e1e1e',
+                textColor: '#d1d4dc',
+                fontSize: 12
+            },
+            grid: {
+                vertLines: { color: '#2b2b43' },
+                horzLines: { color: '#2b2b43' }
+            },
+            rightPriceScale: {
+                borderColor: '#2a2e39',
+                scaleMargins: { top: 0.1, bottom: 0.1 }, // Default, overridden below
+            },
+            timeScale: { borderColor: '#2a2e39', timeVisible: true },
+        });
+
+        // 1. Candlestick Series (Main)
+        const candlestickSeries = chart.addCandlestickSeries({
+            upColor: '#089981',
+            downColor: '#f23645',
+            borderVisible: false,
+            wickUpColor: '#089981',
+            wickDownColor: '#f23645',
+            priceScaleId: 'right',
+        });
+        candlestickSeries.priceScale().applyOptions({
+            scaleMargins: { top: 0.05, bottom: 0.35 }, // Top 60%
+        });
+
+        // 2. Volatility Score (Subplot 1)
+        const volSeries = chart.addLineSeries({
+            color: '#E91E63',
+            lineWidth: 1,
+            priceScaleId: 'prob',
+            title: 'Volatility Score',
+        });
+        chart.priceScale('prob').applyOptions({
+            scaleMargins: { top: 0.65, bottom: 0.15 }, // Height 20%
+            visible: true,
+            borderColor: '#555',
+        });
+
+        // Threshold Lines
+        let triggerLine = null;
+
+        // 3. Volume (Subplot 2)
+        const volumeSeries = chart.addHistogramSeries({
+            color: '#26a69a',
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'vol',
+        });
+        chart.priceScale('vol').applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 }, // Height 15%
+            visible: false,
+        });
+
+        // 4. Equity Overlay (Re-based)
+        const equitySeries = chart.addLineSeries({
+            color: '#2962FF',
+            lineWidth: 2,
+            title: 'Equity',
+            priceScaleId: 'right', // Overlay on Price
+        });
+
+        window.addEventListener('resize', () => {
+            chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
+        });
+
+        // --- Controls Logic ---
+        const inputs = {
+            trigger: document.getElementById('trigger_threshold'),
+            bb: document.getElementById('bb_std'),
+            atr: document.getElementById('atr_trailing_mult'),
+            adx: document.getElementById('adx_min'),
+            trend: document.getElementById('require_trend_alignment'),
+        };
+
+        const displays = {
+            trigger: document.getElementById('val-trigger'),
+            bb: document.getElementById('val-bb'),
+            atr: document.getElementById('val-atr'),
+            adx: document.getElementById('val-adx'),
+        };
+
+        Object.keys(inputs).forEach(key => {
+            if (inputs[key].type === 'range') {
+                inputs[key].addEventListener('input', (e) => {
+                    if (displays[key]) displays[key].innerText = e.target.value;
+                });
+            }
+        });
+
+        // Helper for Time Links
+        window.scrollToTimestamp = function (ts) {
+            chart.timeScale().setVisibleRange({
+                from: ts - 100 * 300, // Approximate zoom
+                to: ts + 100 * 300
+            });
+        };
+
+        // Helper to evaluate scripts in injected content
+        function setInnerHTML(elm, html) {
+            elm.innerHTML = html;
+            Array.from(elm.querySelectorAll("script")).forEach(oldScript => {
+                const newScript = document.createElement("script");
+                Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+                newScript.appendChild(document.createTextNode(oldScript.innerHTML));
+                oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+        }
+
+        // --- API Logic ---
+        async function runSimulation() {
+            const btn = document.getElementById('run-btn');
+            const status = document.getElementById('status');
+
+            btn.disabled = true;
+            status.innerText = "Simulating...";
+
+            const params = {
+                trigger_threshold: parseFloat(inputs.trigger.value),
+                bb_std: parseFloat(inputs.bb.value),
+                atr_trailing_mult: parseFloat(inputs.atr.value),
+                adx_min: parseFloat(inputs.adx.value),
+                require_trend_alignment: inputs.trend.checked
+            };
+
+            // Update Trigger Line
+            if (triggerLine) volSeries.removePriceLine(triggerLine);
+            triggerLine = volSeries.createPriceLine({
+                price: params.trigger_threshold,
+                color: '#FFB74D',
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: 'Trigger',
+            });
+
+            try {
+                const res = await fetch('/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(params)
+                });
+
+                const data = await res.json();
+                if (data.error) {
+                    status.innerText = "Error: " + data.error;
+                    return;
+                }
+
+                // 1. Update Chart Data
+                candlestickSeries.setData(data.candles);
+                volumeSeries.setData(data.volume);
+                if (data.signals) volSeries.setData(data.signals);
+                candlestickSeries.setMarkers(data.markers);
+
+                // Re-base Equity
+                if (data.equity && data.equity.length > 0 && data.candles.length > 0) {
+                    const startEquity = data.equity[0].value;
+                    const startTime = data.equity[0].time;
+                    let matchCandle = data.candles.find(c => c.time >= startTime) || data.candles[0];
+
+                    if (matchCandle && startEquity > 0) {
+                        const factor = matchCandle.close / startEquity;
+                        const rebased = data.equity.map(d => ({
+                            time: d.time,
+                            value: d.value * factor
+                        }));
+                        equitySeries.setData(rebased);
+                    }
+                } else {
+                    equitySeries.setData([]);
+                }
+
+                chart.timeScale().fitContent();
+
+                // 2. Inject Tables with Script Execution
+                setInnerHTML(document.getElementById('metrics-container'), data.metrics_html);
+                setInnerHTML(document.getElementById('dist-container'), data.dist_html);
+                setInnerHTML(document.getElementById('analysis-container'), data.analysis_html);
+                setInnerHTML(document.getElementById('trades-container'), data.trades_html);
+
+                status.innerText = `Done (${data.trade_count} trades)`;
+
+            } catch (e) {
+                status.innerText = "Network Error";
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        document.getElementById('run-btn').addEventListener('click', runSimulation);
+
+        // Sidebar Toggle
+        const toggleBtn = document.getElementById('toggle-btn');
+        const sidebar = document.querySelector('.sidebar');
+        const main = document.querySelector('.main');
+
+        toggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            main.classList.toggle('expanded');
+            setTimeout(() => {
+                chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
+            }, 300); // Wait for transition
+        });
+
+        runSimulation(); // Auto-run on load
+
+    </script>
+</body>
+
+</html>
