@@ -127,7 +127,6 @@ def backtest_star_xgb(
     })
 
     class_means_arr = np.asarray(class_means, dtype=float)
-    class_means_arr = np.asarray(class_means, dtype=float)
     
     if use_vectorized_metrics:
         from .model import _evaluate_vectorized
@@ -282,8 +281,7 @@ def _build_signal_records(
         probs = np.asarray(predicted_probs, dtype=float)
     probs = probs.reshape(len(dataset), -1)
 
-    # [FIX] Calculate Prob(Unsafe) directly
-    # [FIX] Calculate Prob(Unsafe) directly
+    # Calculate Prob(Unsafe) directly
     if probs.ndim == 1:
         volatility_score = probs
     elif probs.shape[1] >= 2:

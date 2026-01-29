@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -148,16 +148,9 @@ class StarFeatureCache:
         )
         frame["range_percent"] = (high_window - low_window) / close.replace(0.0, np.nan)
         
-        # --- NEW FEATURES START ---
-        
-        # 1. RSI
-        # Use cached if available (not implemented yet in cache input, so calc on fly for now or modify cache logic)
-        # To strictly follow plan, we should have cached it. 
-        # But for now, let's calc on fly for simplicity in this edit, as params are fixed.
-        # Future optimization: Add to cache.
         rsi_s = _compute_rsi(close, params.rsi_window)
         frame["rsi"] = rsi_s
-        frame["rsi_slope"] = (rsi_s - rsi_s.shift(3)) / 3.0 # Short term momentum of momentum
+        frame["rsi_slope"] = (rsi_s - rsi_s.shift(3)) / 3.0
         
         # 2. Bollinger Bands
         # _compute_bb returns (upper, middle, lower)
@@ -167,13 +160,11 @@ class StarFeatureCache:
         frame["bb_width"] = bb_width
         frame["bb_pos"] = bb_pos
         
-        # 3. MACD
+        # MACD
         macd_line, macd_signal, macd_hist = _compute_macd(close, params.macd_fast, params.macd_slow, params.macd_signal)
-        # Normalize by close to make it price-agnostic
         frame["macd_hist_norm"] = macd_hist / close.replace(0.0, np.nan)
-        
-        # 4. Log Returns
-        # safe log
+
+        # Log Returns
         log_ret = np.log(close / close.shift(1).replace(0.0, np.nan))
         frame["log_return_1"] = log_ret
         frame["log_return_5"] = log_ret.rolling(5).sum()
@@ -183,23 +174,17 @@ class StarFeatureCache:
         trend_std = close.rolling(window=params.trend_window, min_periods=params.trend_window).std(ddof=0)
         frame["trend_z_score"] = (close - trend_ma) / trend_std.replace(0.0, np.nan)
         
-        # 6. Short-term Deviations (MA5, MA15)
-        # Capture short term overextension
+        # Short-term Deviations
         ma_5 = close.rolling(window=5, min_periods=5).mean()
         ma_15 = close.rolling(window=15, min_periods=15).mean()
         frame["dist_ma_5"] = (close - ma_5) / ma_5.replace(0.0, np.nan)
         frame["dist_ma_15"] = (close - ma_15) / ma_15.replace(0.0, np.nan)
-        
-        # 7. BB Width Delta
-        # Expansion/Contraction
+
+        # BB Width Delta
         frame["bb_width_delta"] = (bb_width - bb_width.shift(1)) / bb_width.shift(1).replace(0.0, np.nan)
-        
-        # 8. Support/Resistance Features
-        # pos_in_range_{k}: Position within the high-low range of last k bars
-        # range_dist_{k}: Range width relative to close (Volatility/Compression)
-        # touch_count_{k}: How many times price touched near the extremes
-        
-        sr_windows = [12, 36, 72, 144, 288] # 1H, 3H, 6H, 12H, 24H
+
+        # Support/Resistance Features
+        sr_windows = [12, 36, 72, 144, 288]
         
         for k in sr_windows:
             roll_high = high.rolling(window=k, min_periods=k).max()
@@ -212,34 +197,23 @@ class StarFeatureCache:
             # High value = Expanded, Low value = Compressed
             frame[f"range_dist_{k}"] = (roll_high - roll_low) / close.replace(0.0, np.nan)
         
-        # 8.3 Touch Count (Test of Support/Resistance)
-        # Count how many lows are within 0.2% of the rolling min (Support Tests)
-        # Count how many highs are within 0.2% of the rolling max (Resistance Tests)
-        # For touch_count, we usually look at a meaningful window like 72 (6H) or 288 (24H)
-        # Doing it for 72 only to save compute
+        # Touch Count
         touch_window = 72
         threshold_pct = 0.002
-        
+
         roll_min_72 = low.rolling(window=touch_window, min_periods=touch_window).min()
         roll_max_72 = high.rolling(window=touch_window, min_periods=touch_window).max()
-        
-        # Boolean series: Is this bar's low near the 72-period low?
-        # Note: We need to compare current low vs existing roll_min (which includes current).
-        # A touch is defined as: low <= roll_min * (1 + thresh)
+
         low_touch = (low <= roll_min_72 * (1 + threshold_pct)).astype(float)
         high_touch = (high >= roll_max_72 * (1 - threshold_pct)).astype(float)
-        
-        # Sum touches in the window
+
         frame[f"support_touch_count_{touch_window}"] = low_touch.rolling(window=touch_window).sum()
         frame[f"resistance_touch_count_{touch_window}"] = high_touch.rolling(window=touch_window).sum()
 
-        # 8.4 ADX (Trend Strength)
-        # Using 14 period usually. reusing rsi_window or atr_window? 
-        # Let's use 14 as standard.
+        # ADX
         frame["adx"] = _compute_adx(high, low, close, 14)
-        
-        # 8.5 Volume Force (Buying vs Selling Pressure)
-        # CMF-style calculation: Close Location Value * Volume
+
+        # Volume Force (CMF-style)
         try:
             clv = ((close - low) - (high - close)) / (high - low)
             clv = clv.fillna(0.0) # Handle 0 range
@@ -270,17 +244,12 @@ class StarFeatureCache:
 
         frame = frame.drop(
             columns=[
-                "rolling_high", "rolling_low", "atr", "volume", 
+                "rolling_high", "rolling_low", "atr", "volume",
                 "log_return_1", "log_return_5",
-                # Pruned based on Gain Analysis (v1.8.6)
                 "upper_shadow_ratio", "lower_shadow_ratio",
                 "close_rel_lag1", "close_rel_lag2", "close_rel_lag3", "close_rel_lag4", "close_rel_lag5",
                 "dist_ma_5", "return_3", "close_rel", "return_1", "body_direction",
-                # "volume_force" # Keeping volume_force for now as MA uses it, but maybe drop raw? 
-                # User asked to delete "last five", volume_force was raw, but MA is useful.
-                # Actually, if I drop it here, model won't see it.
-                # The user saw "volume_force" (raw) in Bottom 10.
-                "volume_force" 
+                "volume_force"
             ],
             errors="ignore",
         )

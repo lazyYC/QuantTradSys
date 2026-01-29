@@ -56,22 +56,14 @@ def build_label_frame(
     future_max_high = high.shift(-1).rolling(window=indexer).max()
     future_min_low = low.shift(-1).rolling(window=indexer).min()
 
-    # Calculate Max Run-up and Max Drawdown relative to Current Close
-    # Note: We care about "Unidirectional Move".
-    # If price goes up 2% AND down 2% in the window -> This is High Volatility, also Dangerous?
-    # Yes. Whipsaw is also dangerous for tight grids.
-    
     max_upside = (future_max_high - close) / close
     max_downside = (close - future_min_low) / close
-    
-    # Label Generation
-    # If upside > threshold OR downside > threshold -> Unsafe (1)
+
+    # Label: Unsafe (1) if upside or downside exceeds threshold
     is_unsafe = (max_upside > vol_threshold) | (max_downside > vol_threshold)
     
     labels = is_unsafe.astype(int).values
 
-    # --- Auxiliary Columns ---
-    # 計算未來實質漲跌幅供分析
     future_close = close.shift(-future_window)
     future_return = (future_close - close) / close.replace(0.0, pd.NA)
     

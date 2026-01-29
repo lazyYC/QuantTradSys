@@ -6,20 +6,6 @@ import re
 import pandas as pd
 from datetime import datetime
 
-# Regex to find the JSON injection
-# html_content.replace("/*INJECT_TRADELIST*/", trades_html) -> This is HTML table
-# markers -> "/*INJECT_MARKERS*/", json.dumps(markers)
-# But markers don't have full trade info.
-# "/*INJECT_METRICS*/" -> HTML
-# Wait, the `engine.py` injects `candle_data`, `equity_data`, `markers`.
-# It DOES NOT inject raw `trade_list` as JSON, only as HTML table.
-# Checking engine.py...
-# It creates `trades_html` table.
-# But `analysis.py` is hard.
-# However, the markers JSON has: {time, position, color, shape, text (price)}.
-# And `equity_data` has timestamps.
-# The HTML table: `<table class="... dataframe">...</table>`
-# Maybe parsing the HTML table is easier? using pd.read_html.
 
 def analyze_report(file_path):
     print(f"Analyzing {file_path}...")

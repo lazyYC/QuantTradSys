@@ -283,18 +283,7 @@ def _simulate_trades(
     min_hold_bars: int = 0,
     profit_ratio: float = 0.4,
 ) -> pd.DataFrame:
-    """
-    v1.6.0 Simulation Logic: Smart Grid with Staged Reaction & Directional Bias.
-    
-    Roles:
-    - Pure Grid: Beta (Volatility Harvesting)
-    - ML Model: Alpha (Risk Avoidance / Regime Filter)
-      - Prob(Unsafe) > Suspend_Threshold: Suspend New Entries (Yellow Alert)
-      - Prob(Unsafe) > Eject_Threshold: Panic Close (Red Alert)
-    - Directional Bias:
-      - Price > TrendMA: Long Grid Only
-      - Price < TrendMA: Short Grid Only
-    """
+    """執行波動突破模擬交易：ML 預測高波動 → BB 突破進場 → ATR 追蹤止損。"""
     trade_columns = [
         "side",
         "entry_time",
@@ -318,15 +307,8 @@ def _simulate_trades(
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
     
-    # Note: For Binary Classification, "expected_returns" is actually Prob(Class 1 = Unsafe)
-    # LightGBM predict_proba returns [Prob(0), Prob(1)]
-    # We should have passed Prob(1) as expected_returns in _evaluate
-    frame["volatility_score"] = expected_returns 
-    frame["predicted_class_sim"] = pred_classes # 0 or 1
-    
-    # Ensure external features exist
-    if "trend_ma" not in frame.columns:
-        pass # Should be there
+    frame["volatility_score"] = expected_returns
+    frame["predicted_class_sim"] = pred_classes
 
     frame = frame.dropna(
         subset=["timestamp", "close", "volatility_score"]
@@ -342,28 +324,18 @@ def _simulate_trades(
     atr_mult = getattr(ind_params, "atr_trailing_mult", 3.0)
     trigger_thresh = getattr(ind_params, "trigger_threshold", 0.6)
     
-    # Calculate Bollinger Bands (Shifted by 1 to avoid lookahead)
-    # Using small window for fast reaction (e.g., 20)
+    # Bollinger Bands
     bb_window = getattr(ind_params, "bb_window", 20)
     bb_std = getattr(ind_params, "bb_std", 2.0)
-    
     roll_mean = frame["close"].rolling(bb_window).mean().shift(1)
     roll_std = frame["close"].rolling(bb_window).std(ddof=0).shift(1)
-    
     frame["bb_upper"] = roll_mean + (roll_std * bb_std)
     frame["bb_lower"] = roll_mean - (roll_std * bb_std)
-    
-    # Donchian Channel (Backup High/Low for stop loss reference?) 
-    # Actually for stop loss we use ATR or Monotonic.
-    # We can keep Donchian just in case or remove if unused. 
-    # Let's remove Donchian to cleaner logic.
-    
-    # ATR Calculation (v1.8.0)
+
+    # ATR
     if "atr" not in frame.columns:
-        # Simple estimation if feature missing, but it should be there from features.py usually?
-        # Let's calculate simple rolling TR approximation
         tr = np.maximum(frame["high"] - frame["low"], np.abs(frame["high"] - frame["close"].shift(1)))
-        frame["atr"] = tr.rolling(14).mean().bfill() # Default to 14 if not in params
+        frame["atr"] = tr.rolling(14).mean().bfill()
         
     records = []
     open_trades: List[Dict] = []
@@ -652,15 +624,10 @@ def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
             expected_series = pd.to_numeric(
                 trades.loc[mask, col_name], errors="coerce"
             ).dropna()
-            
-            # Rename metric to mean_volatility_score_{key} if it is volatility_score?
-            # For compatibility with report, might want to keep keys or add new ones.
-            # Let's add new ones and keep old one as 0 or Alias?
-            # Report usually iterates metrics.
+
             summary[f"mean_volatility_score_{key}"] = (
                 float(expected_series.mean()) if not expected_series.empty else 0.0
             )
-            # Legacy key fill (optional)
             summary[f"mean_expected_{key}"] = summary[f"mean_volatility_score_{key}"]
         else:
             summary[f"{key}_trades"] = 0.0

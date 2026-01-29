@@ -86,13 +86,9 @@ def run_grid_search(
         LOGGER.warning("Params 'indicator' key missing, assuming flat structure.")
         LOGGER.info(f"Available Keys: {list(record.params.keys())}")
         ind_dict = record.params
-        mod_dict = record.params # StarModelParams will ignore extras? No, dataclass **dict might fail if strict.
-        # But StarParams usually generated from dataclasses which might have methods. 
-        # Actually StarModelParams probably won't accept unknown args if it's a standard dataclass.
-        # Let's filter? Or rely on non-strict init if defined that way.
-        # Assuming standard dataclass, we must filter.
-        
-    # Helper to filter
+        mod_dict = record.params
+
+    # Helper to filter dataclass fields
     def filter_params(cls, data):
         valid = set(cls.__annotations__.keys())
         return {k: v for k, v in data.items() if k in valid}
@@ -105,7 +101,7 @@ def run_grid_search(
         symbol=symbol,
         timeframe=timeframe,
         lookback_days=360,
-        exchange_id="binanceusdm", # Hardcoded or infer? Best to infer but binanceusdm is safe default here
+        exchange_id="binanceusdm",
     )
     cleaned = prepare_ohlcv_frame(raw_df, timeframe)
     
@@ -154,23 +150,18 @@ def run_grid_search(
     probs = booster.predict(X, predict_disable_shape_check=False) # Should match now
     
     if probs.ndim == 1:
-        prob_unsafe = probs
+        volatility_score = probs
     else:
-        prob_unsafe = probs[:, 1]
-        
-    # [DEBUG] Probability Calibration Check
+        volatility_score = probs[:, 1]
+
+    # Debug: Volatility Score Calibration Check
     p_mean = np.mean(volatility_score)
     p_max = np.max(volatility_score)
     p_90 = np.percentile(volatility_score, 90)
     p_99 = np.percentile(volatility_score, 99)
-    LOGGER.info(f"[DEBUG] Prob Unsafe Stats: Mean={p_mean:.4f}, Max={p_max:.4f}, p90={p_90:.4f}, p99={p_99:.4f}")
+    LOGGER.info(f"Volatility Score Stats: Mean={p_mean:.4f}, Max={p_max:.4f}, p90={p_90:.4f}, p99={p_99:.4f}")
     if p_max < 0.5:
-        LOGGER.warning("[WARNING] Max Probability < 0.5. Trigger threshold 0.55+ will NEVER fire!")
-    
-    if probs.ndim == 1:
-        volatility_score = probs
-    else:
-        volatility_score = probs[:, 1]
+        LOGGER.warning("Max Volatility Score < 0.5. Trigger threshold 0.55+ will NEVER fire!")
     
     full_df = features.copy()
     full_df["volatility_score"] = volatility_score
@@ -178,19 +169,9 @@ def run_grid_search(
     # 5. Split Dataset
     train_raw, valid_raw, test_raw = split_train_valid_test(full_df, test_days=30, valid_pct=0.15)
     
-    # 6. Apply Warmup (Prepend data to ensure indicators/rolling windows work)
-    # Model features are already built, but _simulate_trades calculates Donchian/ATR internally on the DF passed to it?
-    # Wait, _simulate_trades in model.py calculates Donchian and ATR inside using rolling windows!
-    # So we MUST have warmup rows for simulation to be accurate at the start of the split.
-    
-    warmup_bars = 200 # Sufficient for Donchian(100) and ATR(14)
-    
-    # We need to prepend rows from full_df to valid/test/train
-    # Train doesn't need warmup relative to itself, but needs preceding data if it exists? 
-    # Actually split logic already cuts train from remaining, so train is the head. It might miss data at start if we don't fetch more?
-    # But usually 360 days is enough. Let's assume Train starts at index 0 of cleaned.
-    
-    # Helper to reconstruct contiguous DF with warmup
+    # 6. Apply Warmup for simulation rolling windows
+    warmup_bars = 200
+
     def get_split_with_warmup(split_df):
         if split_df.empty: return split_df
         start_idx = split_df.index[0]
@@ -204,12 +185,8 @@ def run_grid_search(
     
     LOGGER.info(f"Splits Prepared: Train={len(train_input)} (Core={len(train_raw)}), Valid={len(valid_input)} (Core={len(valid_raw)}), Test={len(test_input)} (Core={len(test_raw)})")
     
-    # 7. Define Grid
-    # 7. Define Grid
-    triggers = [0.6, 0.70, 0.8] 
-    
-    # Replaced Breakouts with BB Std Devs
-    # breakouts = [40, 60] -> Not used
+    # Define Grid
+    triggers = [0.6, 0.70, 0.8]
     bb_stds = [1.8, 2.0, 2.2]
     
     atr_mults = [3.0, 4.0, 5.0]

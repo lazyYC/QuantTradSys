@@ -37,7 +37,7 @@ SIM_STATE: Dict[str, Any] = {
     "candles": pd.DataFrame(),
     "model_path": None,
     "base_params": {},
-    "feature_cache": None, # If we want to optimize further
+    "feature_cache": None,
 }
 
 class SimParams(BaseModel):
@@ -130,9 +130,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
-# Mount static if needed (e.g. for js libs if local)
-# app.mount("/static", StaticFiles(directory="static"), name="static")
-
 @app.get("/", response_class=HTMLResponse)
 async def get_ui(request: Request):
     return templates.TemplateResponse("playground.html", {
@@ -172,12 +169,8 @@ async def run_simulation(params: SimParams):
     current_params["require_trend_alignment"] = params.require_trend_alignment
     
     # Run Backtest
-    # We pass 'core_start' to trim warmup?
-    # We used 'days' arg to define window.
-    # Let's define core_start as (Max - days)
     max_ts = SIM_STATE["candles"]["timestamp"].max()
-    args = parse_args() # re-parse or store? Globals are hacky but works for script
-    # We can infer core_start from the slicing we did
+    args = parse_args()
     core_start = max_ts - pd.Timedelta(days=args.days)
     
     try:
@@ -193,11 +186,7 @@ async def run_simulation(params: SimParams):
         
     # Format Results for UI using shared Utils
     
-    # 1. Chart Data
-    # Slice candles to core_start for visualization if desired, or return all loaded
-    # engine.py trims to start_ts - 2 days. Here core_start is ~30 days ago.
-    # We'll return the full loaded set for context, or maybe trim warmup?
-    # Let's trim to core_start - 2 days to hide the 200 EMA warmup noise
+    # Trim warmup from visualization
     vis_start = core_start - pd.Timedelta(days=2)
     vis_candles = SIM_STATE["candles"][SIM_STATE["candles"]["timestamp"] >= vis_start].copy()
     
@@ -209,8 +198,6 @@ async def run_simulation(params: SimParams):
     # Check signals
     prob_data = []
     if hasattr(result, "signals") and not result.signals.empty:
-        # Filter signals to match vis range roughly? Or just format all validity
-        # format_signals expects 'volatility_score' or 'prob_unsafe'
         sig_col = "volatility_score" if "volatility_score" in result.signals.columns else "prob_unsafe"
         prob_data = format_signals(result.signals, sig_col)
         
@@ -240,8 +227,6 @@ async def run_simulation(params: SimParams):
     }
 
 def parse_args():
-    # Only parse known args to avoid conflict with uvicorn if run directly?
-    # Actually usually we run this script via python, checking __name__==main
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", default="playground")
     parser.add_argument("--study", default="v2.2.1")
