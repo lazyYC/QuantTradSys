@@ -77,6 +77,16 @@ python scripts/report.py --strategy star_xgb --study test3 --dataset all --start
 - `--dataset`: 選擇報告資料集 (`train`, `valid`, `test`, `all`)。
 - `--start` / `--end`: 指定報告的時間範圍。
 
+## 互動式實驗室 (Playground)
+
+使用 `scripts/interactive_backtest.py` 啟動 Web 介面進行即時參數調校。
+
+```powershell
+python scripts/interactive_backtest.py --strategy playground --study v2.2.1 --days 60
+```
+
+啟動後訪問 `http://localhost:8000`，可即時調整參數並觀察權益曲線變化。
+
 ## 即時排程 (Scheduler)
 
 使用 `scripts/run_scheduler.py` 啟動即時交易引擎。
