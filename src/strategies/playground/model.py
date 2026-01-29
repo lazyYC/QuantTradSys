@@ -303,8 +303,8 @@ def _simulate_trades(
         "exit_price",
         "return",
         "holding_mins",
-        "entry_prob_unsafe", # Replaces entry_expected_return
-        "exit_prob_unsafe",  # Replaces exit_expected_return
+        "entry_volatility_score", # Replaces entry_expected_return
+        "exit_volatility_score",  # Replaces exit_expected_return
         "entry_class",
         "exit_class",
         "exit_reason",
@@ -321,7 +321,7 @@ def _simulate_trades(
     # Note: For Binary Classification, "expected_returns" is actually Prob(Class 1 = Unsafe)
     # LightGBM predict_proba returns [Prob(0), Prob(1)]
     # We should have passed Prob(1) as expected_returns in _evaluate
-    frame["prob_unsafe"] = expected_returns 
+    frame["volatility_score"] = expected_returns 
     frame["predicted_class_sim"] = pred_classes # 0 or 1
     
     # Ensure external features exist
@@ -329,7 +329,7 @@ def _simulate_trades(
         pass # Should be there
 
     frame = frame.dropna(
-        subset=["timestamp", "close", "prob_unsafe"]
+        subset=["timestamp", "close", "volatility_score"]
     )
 
     # --- Strategy Parameters (v1.8.0 Volatility Breakout) ---
@@ -375,7 +375,7 @@ def _simulate_trades(
     lows = frame["low"].values
     bb_uppers = frame["bb_upper"].values
     bb_lowers = frame["bb_lower"].values
-    probs = frame["prob_unsafe"].values
+    probs = frame["volatility_score"].values
     atrs = frame["atr"].values
     
     # --- Feature Extraction for Filters ---
@@ -480,8 +480,8 @@ def _simulate_trades(
                     "exit_price": exit_fill,
                     "return": ret,
                     "holding_mins": delta.total_seconds() / 60.0,
-                    "entry_prob_unsafe": t["entry_prob_unsafe"],
-                    "exit_prob_unsafe": prob,
+                    "entry_volatility_score": t["entry_volatility_score"],
+                    "exit_volatility_score": prob,
                     "entry_class": t["entry_class"],
                     "exit_class": 0,
                     "exit_reason": exit_reason,
@@ -542,9 +542,9 @@ def _simulate_trades(
                         "side": "LONG",
                         "entry_time": current_time,
                         "entry_price": close_price,
-                        "entry_prob_unsafe": prob,
+                        "entry_volatility_score": prob,
                         "entry_class": 1,
-                        "highest_high": close_price, 
+                        "highest_high": close_price,
                         "stop_price": init_stop,
                     })
             
@@ -560,7 +560,7 @@ def _simulate_trades(
                         "side": "SHORT",
                         "entry_time": current_time,
                         "entry_price": close_price,
-                        "entry_prob_unsafe": prob,
+                        "entry_volatility_score": prob,
                         "entry_class": 1,
                         "lowest_low": close_price,
                         "stop_price": init_stop,
@@ -584,8 +584,8 @@ def _simulate_trades(
                 "exit_price": last_price,
                 "return": ret,
                 "holding_mins": 0.0,
-                "entry_prob_unsafe": t["entry_prob_unsafe"],
-                "exit_prob_unsafe": 0.0,
+                "entry_volatility_score": t["entry_volatility_score"],
+                "exit_volatility_score": 0.0,
                 "entry_class": t["entry_class"],
                 "exit_class": 0,
                 "exit_reason": "end_of_data",
@@ -648,25 +648,25 @@ def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
             summary[f"{key}_win_rate"] = float((side_returns > 0).mean())
             
             # Use new column name, fallback to old if missing
-            col_name = "entry_prob_unsafe" if "entry_prob_unsafe" in trades.columns else "entry_expected_return"
+            col_name = "entry_volatility_score" if "entry_volatility_score" in trades.columns else "entry_expected_return"
             expected_series = pd.to_numeric(
                 trades.loc[mask, col_name], errors="coerce"
             ).dropna()
             
-            # Rename metric to mean_prob_unsafe_{key} if it is prob_unsafe?
+            # Rename metric to mean_volatility_score_{key} if it is volatility_score?
             # For compatibility with report, might want to keep keys or add new ones.
             # Let's add new ones and keep old one as 0 or Alias?
             # Report usually iterates metrics.
-            summary[f"mean_prob_unsafe_{key}"] = (
+            summary[f"mean_volatility_score_{key}"] = (
                 float(expected_series.mean()) if not expected_series.empty else 0.0
             )
             # Legacy key fill (optional)
-            summary[f"mean_expected_{key}"] = summary[f"mean_prob_unsafe_{key}"]
+            summary[f"mean_expected_{key}"] = summary[f"mean_volatility_score_{key}"]
         else:
             summary[f"{key}_trades"] = 0.0
             summary[f"{key}_total_return"] = 0.0
             summary[f"{key}_win_rate"] = 0.0
-            summary[f"mean_prob_unsafe_{key}"] = 0.0
+            summary[f"mean_volatility_score_{key}"] = 0.0
             summary[f"mean_expected_{key}"] = 0.0
 
     return summary
@@ -777,10 +777,10 @@ def _evaluate(
 
     # Probs is [N, 2] usually. We want Prob(Unsafe) = Prob(1)
     # If using LightGBM multiclass=2, it returns [Prob0, Prob1].
-    prob_unsafe = probs[:, 1]
+    volatility_score = probs[:, 1]
     
     # Predict based on Decision Threshold
-    preds = (prob_unsafe > params.decision_threshold).astype(int)
+    preds = (volatility_score > params.decision_threshold).astype(int)
     y_true = df[TARGET_COLUMN].to_numpy()
     
     from sklearn.metrics import accuracy_score, precision_score, recall_score
@@ -795,10 +795,9 @@ def _evaluate(
     recall = float(recall_score(y_true, preds, zero_division=0))
     
     # Simulation
-    # Pass Prob(Unsafe) as expected_returns for sim function convention
     trades = _simulate_trades(
         df,
-        prob_unsafe,
+        volatility_score,
         preds,
         params,
         indicator_params=indicator_params,
@@ -855,14 +854,14 @@ def _evaluate_vectorized(
     # This rewards the model for avoiding large drawdowns (when future_long_return is negative)
     # and punishes it for missing rallies (when future_long_return is positive).
     
-    prob_unsafe = probs[:, 1]
+    volatility_score = probs[:, 1]
     threshold = float(params.decision_threshold)
     
     # Logic: Safe vs Unsafe
     # Note: We use 'future_long_return' as the proxy for holding the asset.
     # Ideally we'd know the trend, but for random split validation, Long Bias Proxy is standard for Crypto.
     
-    is_safe = prob_unsafe < threshold
+    is_safe = volatility_score < threshold
     
     pnl = np.zeros(len(df))
     

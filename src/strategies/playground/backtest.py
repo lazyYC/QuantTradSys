@@ -94,14 +94,6 @@ def backtest_star_xgb(
     if core_start is not None:
         core_start_ts = pd.to_datetime(core_start, utc=True, errors="coerce")
 
-        return StarBacktestResult(
-            trades=pd.DataFrame(),
-            metrics={},
-            equity_curve=pd.DataFrame(),
-            period_start=core_start_ts,
-            period_end=None,
-        )
-
     booster = load_star_model(model_path)
 
     if feature_columns is None:
@@ -115,23 +107,23 @@ def backtest_star_xgb(
     # Handle both Multiclass (N, 2) and Binary (N,) output shapes from LightGBM
     if probs.ndim == 1:
         # If 1D, assume it is P(Unsafe) equivalent to column 1 if binary
-        prob_unsafe = probs
+        volatility_score = probs
     elif probs.shape[1] >= 2:
         # If 2D, take column 1 (Unsafe)
-        prob_unsafe = probs[:, 1]
+        volatility_score = probs[:, 1]
     else:
         # Fallback
-        prob_unsafe = np.zeros(len(dataset))
+        volatility_score = np.zeros(len(dataset))
         
-    # Debug: Check if prob_unsafe is all zero
-    if len(prob_unsafe) > 0:
-        avg_p = np.mean(prob_unsafe)
-        max_p = np.max(prob_unsafe)
-        print(f"[DEBUG] Prob Unsafe Check: Avg={avg_p:.4f}, Max={max_p:.4f}, Zeros={np.sum(prob_unsafe == 0)}/{len(prob_unsafe)}")
+    # Debug: Check if volatility_score is all zero
+    if len(volatility_score) > 0:
+        avg_p = np.mean(volatility_score)
+        max_p = np.max(volatility_score)
+        print(f"[DEBUG] Prob Unsafe Check: Avg={avg_p:.4f}, Max={max_p:.4f}, Zeros={np.sum(volatility_score == 0)}/{len(volatility_score)}")
 
     signals_df = pd.DataFrame({
         "timestamp": dataset["timestamp"],
-        "prob_unsafe": prob_unsafe
+        "volatility_score": volatility_score
     })
 
     class_means_arr = np.asarray(class_means, dtype=float)
@@ -291,23 +283,24 @@ def _build_signal_records(
     probs = probs.reshape(len(dataset), -1)
 
     # [FIX] Calculate Prob(Unsafe) directly
+    # [FIX] Calculate Prob(Unsafe) directly
     if probs.ndim == 1:
-        prob_unsafe = probs
+        volatility_score = probs
     elif probs.shape[1] >= 2:
-        prob_unsafe = probs[:, 1]
+        volatility_score = probs[:, 1]
     else:
-        prob_unsafe = np.zeros(len(dataset))
+        volatility_score = np.zeros(len(dataset))
         
     pred_idx = probs.argmax(axis=1)
     pred_class = CLASS_VALUES[pred_idx]
 
-    # For Binary Classification in v1.6.0, we pass prob_unsafe as "expected_returns"
+    # For Binary Classification in v1.6.0, we pass volatility_score as "expected_returns"
     # because model.py's _simulate_trades expects "expected_returns" to be the signal for Eject/Suspend
-    # See model.py line 303: frame["prob_unsafe"] = expected_returns
+    # See model.py line 303: frame["volatility_score"] = expected_returns
     
     trades = _simulate_trades(
         dataset,
-        prob_unsafe, # PASS PROBABILITY HERE
+        volatility_score, # PASS PROBABILITY HERE
         pred_class,
         model_params,
         indicator_params=indicator_params,
