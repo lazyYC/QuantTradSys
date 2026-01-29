@@ -159,21 +159,21 @@ def run_grid_search(
         prob_unsafe = probs[:, 1]
         
     # [DEBUG] Probability Calibration Check
-    p_mean = np.mean(prob_unsafe)
-    p_max = np.max(prob_unsafe)
-    p_90 = np.percentile(prob_unsafe, 90)
-    p_99 = np.percentile(prob_unsafe, 99)
+    p_mean = np.mean(volatility_score)
+    p_max = np.max(volatility_score)
+    p_90 = np.percentile(volatility_score, 90)
+    p_99 = np.percentile(volatility_score, 99)
     LOGGER.info(f"[DEBUG] Prob Unsafe Stats: Mean={p_mean:.4f}, Max={p_max:.4f}, p90={p_90:.4f}, p99={p_99:.4f}")
     if p_max < 0.5:
         LOGGER.warning("[WARNING] Max Probability < 0.5. Trigger threshold 0.55+ will NEVER fire!")
     
     if probs.ndim == 1:
-        prob_unsafe = probs
+        volatility_score = probs
     else:
-        prob_unsafe = probs[:, 1]
+        volatility_score = probs[:, 1]
     
     full_df = features.copy()
-    full_df["prob_unsafe"] = prob_unsafe
+    full_df["volatility_score"] = volatility_score
     
     # 5. Split Dataset
     train_raw, valid_raw, test_raw = split_train_valid_test(full_df, test_days=30, valid_pct=0.15)
@@ -255,7 +255,7 @@ def run_grid_search(
                 
             trades = _simulate_trades(
                 split_df,
-                split_df["prob_unsafe"].values,
+                split_df["volatility_score"].values,
                 np.zeros(len(split_df)), # pred_classes
                 model_params, # params (StarModelParams)
                 indicator_params=current_ind_params,
