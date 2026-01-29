@@ -242,7 +242,7 @@
             const candleData = /*INJECT_CANDLES*/;
             const equityData = /*INJECT_EQUITY*/;
             const benchmarkData = /*INJECT_BENCHMARK_EQUITY*/;
-            const probData = /*INJECT_PROB_UNSAFE*/;
+            const volatilityScoreData = /*INJECT_VOLATILITY_SCORE*/;
             const suspendThresh = /*INJECT_SUSPEND_THRESH*/;
             const ejectThresh = /*INJECT_EJECT_THRESH*/;
             const allMarkers = /*INJECT_MARKERS*/; // Contains full data
@@ -342,33 +342,33 @@
             });
             candlestickSeries.setData(candleData);
 
-            // 2. Prob Series (Subplot 1) - Top of bottom section
-            const probSeries = chart.addLineSeries({
+            // 2. Volatility Score Series (Subplot 1) - Top of bottom section
+            const volSeries = chart.addLineSeries({
                 color: '#E91E63',
                 lineWidth: 1,
                 priceScaleId: 'prob', // Separate Scale
-                title: 'Prob(Unsafe)',
+                title: 'Volatility Score',
             });
             chart.priceScale('prob').applyOptions({
                 scaleMargins: { top: 0.65, bottom: 0.15 }, // Height 20%
                 visible: true,
                 borderColor: '#555',
             });
-            probSeries.setData(probData);
+            volSeries.setData(volatilityScoreData);
 
             // Add Threshold Lines
             if (suspendThresh > 0) {
-                probSeries.createPriceLine({
+                volSeries.createPriceLine({
                     price: suspendThresh,
                     color: '#FFB74D', // Orange
                     lineWidth: 1,
                     lineStyle: LightweightCharts.LineStyle.Dashed,
                     axisLabelVisible: true,
-                    title: 'Suspend',
+                    title: 'Trigger',
                 });
             }
             if (ejectThresh > 0 && ejectThresh < 1.0) {
-                probSeries.createPriceLine({
+                volSeries.createPriceLine({
                     price: ejectThresh,
                     color: '#D32F2F', // Red
                     lineWidth: 1,
@@ -504,7 +504,7 @@
 
                         benchmark = param.seriesData.get(benchmarkSeries);
                         volume = param.seriesData.get(volumeSeries);
-                        prob = param.seriesData.get(probSeries);
+                        prob = param.seriesData.get(volSeries);
                     } catch (e) {
                         // Ignore lookup errors
                     }
@@ -520,7 +520,7 @@
                         candle = candleData[candleData.length - 1];
                         equity = equityData.find(e => e.time === time); // Might be slow
                         volume = volumeData.find(v => v.time === time);
-                        prob = probData.find(p => p.time === time);
+                        prob = volatilityScoreData.find(p => p.time === time);
                     } else {
                         // Hovering but no data? (Gap)
                     }
@@ -542,7 +542,7 @@
                 if (prob) {
                     const val = prob.value !== undefined ? prob.value : prob;
                     const color = val > 0.4 ? '#ff5252' : '#E91E63'; // Red alert warning color?
-                    components.push(`<span style="color:${color}">Prob: ${val.toFixed(2)}</span>`);
+                    components.push(`<span style="color:${color}">VolScore: ${val.toFixed(2)}</span>`);
                 }
 
 

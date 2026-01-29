@@ -25,7 +25,8 @@ from reporting.tables import (
     create_top_trades_table,
     create_trade_distribution_table,
 )
-from reporting.plotting import build_candlestick_figure, build_trade_overview_figure, build_scatter_figure
+from reporting.chart_utils import format_candles, format_volume, format_equity, format_signals, format_markers
+from reporting.table_html_utils import generate_metrics_html, generate_distribution_html, generate_analysis_html, generate_trades_html
 
 LOGGER = logging.getLogger(__name__)
 
@@ -338,228 +339,43 @@ class ReportEngine:
         if "timestamp" in candles.columns:
             candles["time"] = candles["timestamp"].astype('int64') // 10**9
         
-        candle_data = []
-        volume_data = []
-        for _, row in candles.iterrows():
-            c = {
-                "time": int(row["time"]),
-                "open": float(row["open"]),
-                "high": float(row["high"]),
-                "low": float(row["low"]),
-                "close": float(row["close"]),
-            }
-            candle_data.append(c)
+        candle_data = format_candles(candles)
+        volume_data = format_volume(candles)
             
-            # Volume color based on close > open
-            color = "#26a69a" if row["close"] >= row["open"] else "#ef5350"
-            v = {
-                "time": int(row["time"]),
-                "value": float(row["volume"]),
-                "color": color
-            }
-            volume_data.append(v)
-            
-        # Equity
-        equity_data = []
-        if not self.ctx.equity_df.empty:
-            eq = self.ctx.equity_df.copy()
-            eq["time"] = eq["timestamp"].astype('int64') // 10**9
-            for _, row in eq.iterrows():
-                equity_data.append({
-                    "time": int(row["time"]),
-                    "value": float(row["equity"])
-                })
-                
+        # 2. Equity
+        equity_data = format_equity(self.ctx.equity_df)
+
         # Benchmark Equity
         benchmark_data = []
         if not self.ctx.benchmark_equity_df.empty:
              bench_eq = self.ctx.benchmark_equity_df.copy()
-             # Ensure timestamp format
              if "timestamp" in bench_eq.columns:
                  bench_eq = filter_by_time(bench_eq, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
-                 bench_eq["time"] = pd.to_datetime(bench_eq["timestamp"], utc=True).astype('int64') // 10**9
-                 for _, row in bench_eq.iterrows():
-                     benchmark_data.append({
-                         "time": int(row["time"]),
-                         "value": float(row["equity"])
-                     })
+             benchmark_data = format_equity(bench_eq)
 
-        # Signals (Prob Unsafe)
+        # 3. Signals (Volatility Score)
         prob_data = []
         if not self.ctx.signals_df.empty:
              sigs = self.ctx.signals_df.copy()
              if "timestamp" in sigs.columns:
                  sigs = filter_by_time(sigs, "timestamp", self.ctx.start_ts, self.ctx.end_ts)
-                 sigs["time"] = pd.to_datetime(sigs["timestamp"], utc=True).astype('int64') // 10**9
-                 for _, row in sigs.iterrows():
-                     prob_data.append({
-                         "time": int(row["time"]),
-                         "value": float(row["prob_unsafe"])
-                     })
-
-        # Markers (Trades)
-        markers = []
-        if not self.ctx.trades_df.empty:
-            raw_markers = []
-            for _, row in self.ctx.trades_df.iterrows():
-                # Entry
-                entry_ts = int(pd.to_datetime(row["entry_time"]).timestamp())
-                raw_markers.append({
-                    "time": entry_ts,
-                    "position": "belowBar" if row["side"] == "LONG" else "aboveBar",
-                    "color": "#2196F3" if row["side"] == "LONG" else "#E91E63",
-                    "shape": "arrowUp" if row["side"] == "LONG" else "arrowDown",
-                    "text": f"Entry: {row['entry_price']}",
-                    "id": f"entry_{entry_ts}" # Unique key part
-                })
-                
-                # Exit
-                exit_ts = int(pd.to_datetime(row["exit_time"]).timestamp())
-                raw_markers.append({
-                    "time": exit_ts,
-                    "position": "aboveBar" if row["side"] == "LONG" else "belowBar", 
-                    "color": "#FF9800",
-                    "shape": "circle", 
-                    "text": f"Exit: {row['exit_price']}",
-                    "id": f"exit_{exit_ts}" 
-                })
-            
-            # Group markers to prevent overlap
-            marker_map = {}
-            for m in raw_markers:
-                key = (m["time"], m["position"], m["color"], m["shape"])
-                if key not in marker_map:
-                    marker_map[key] = []
-                marker_map[key].append(m["text"])
-            
-            for (ts, pos, col, shp), texts in marker_map.items():
-                combined_text = " | ".join(texts)
-                # If too long, truncate or summarize
-                if len(texts) > 2:
-                    combined_text = f"{len(texts)} trades | " + " | ".join(texts[:2]) + "..."
-                    
-                markers.append({
-                    "time": ts,
-                    "position": pos,
-                    "color": col,
-                    "shape": shp,
-                    "text": combined_text
-                })
+             
+             # Determine signal column
+             sig_col = "volatility_score" if "volatility_score" in sigs.columns else "prob_unsafe"
+             prob_data = format_signals(sigs, sig_col)
         
-        # Sort markers by time just in case
-        markers.sort(key=lambda x: x["time"])
+        # Markers (Trades)
+        # Note: Markers logic in engine.py was complex (grouping/truncating). 
+        # format_markers in chart_utils replicates this exact logic.
+        markers = format_markers(self.ctx.trades_df)
         
         # 4. Prepare Tables (Metrics & Distribution)
-        # We render them as simple HTML tables to match the dark theme via CSS
-        metrics_html = ""
-        if not self.ctx.metrics_df.empty:
-            # Transpose for better view if it's a single row
-            m_df = self.ctx.metrics_df.copy()
-            if len(m_df) == 1:
-                m_df = m_df.T.reset_index()
-                m_df.columns = ["Metric", "Value"]
-            metrics_html = m_df.to_html(classes="data-table", index=False, border=0, float_format=lambda x: f"{x:.4f}")
-            
-        dist_html = ""
-        analysis_html = ""
-        trades_html = ""
-
-        if not self.ctx.trades_df.empty:
-            t_df = self.ctx.trades_df.copy()
-            
-            # --- Distribution ---
-            dist_data = {
-                "Total Trades": len(t_df),
-                "Longs": len(t_df[t_df["side"] == "LONG"]),
-                "Shorts": len(t_df[t_df["side"] == "SHORT"]),
-                "Win Rate": f"{(len(t_df[t_df['return'] > 0]) / len(t_df) * 100):.1f}%" if len(t_df) > 0 else "0%",
-                "Avg Return": f"{t_df['return'].mean():.4f}",
-            }
-            if "holding_mins" in t_df.columns:
-                hold_mins = pd.to_numeric(t_df["holding_mins"], errors='coerce').fillna(0)
-                dist_data["Holding Avg (m)"] = f"{hold_mins.mean():.1f}"
-                dist_data["Holding Median (m)"] = f"{hold_mins.median():.1f}"
-                dist_data["Holding Max (m)"] = f"{hold_mins.max():.1f}"
-            
-            dist_df = pd.DataFrame([dist_data])
-            dist_df = dist_df.T.reset_index()
-            dist_df.columns = ["Stat", "Value"]
-            dist_html = dist_df.to_html(classes="data-table", index=False, border=0)
-
-            # --- Analysis (Correlation) ---
-            if "holding_mins" in t_df.columns:
-                t_df["return_numeric"] = pd.to_numeric(t_df["return"], errors='coerce').fillna(0)
-                t_df["hold_numeric"] = pd.to_numeric(t_df["holding_mins"], errors='coerce').fillna(0)
-                
-                # Safe correlation (requires > 1 point)
-                corr = t_df["hold_numeric"].corr(t_df["return_numeric"]) if len(t_df) > 1 else 0.0
-                
-                # Check safe indexing
-                long_mask = t_df["side"] == "LONG"
-                short_mask = t_df["side"] == "SHORT"
-                
-                l_df = t_df.loc[long_mask]
-                s_df = t_df.loc[short_mask]
-                
-                l_corr = l_df["hold_numeric"].corr(l_df["return_numeric"]) if len(l_df) > 1 else 0.0
-                s_corr = s_df["hold_numeric"].corr(s_df["return_numeric"]) if len(s_df) > 1 else 0.0
-                
-                analysis_data = {
-                    "Corr (Time vs Return) All": f"{corr:.4f}",
-                    "Corr (Time vs Return) Long": f"{l_corr:.4f}",
-                    "Corr (Time vs Return) Short": f"{s_corr:.4f}",
-                }
-                analysis_df = pd.DataFrame([analysis_data]).T.reset_index()
-                analysis_df.columns = ["Metric", "Value"]
-                analysis_html = analysis_df.to_html(classes="data-table", index=False, border=0)
-                
-                # Add Scatter Plot
-                scatter_fig = build_scatter_figure(t_df, title="Holding Time vs Return")
-                if scatter_fig:
-                    scatter_html = scatter_fig.to_html(full_html=False, include_plotlyjs='cdn')
-                    analysis_html += f"<div style='margin-top: 20px;'>{scatter_html}</div>"
-
-            # --- Full Trade List ---
-            # Sort by time
-            t_df = t_df.sort_values("entry_time", ascending=False)
-            
-            # Create Navigation Links for Times
-            # Entry Time Link
-            t_df["ts_entry"] = pd.to_datetime(t_df["entry_time"], utc=True).astype('int64') // 10**9
-            t_df["entry_time_display"] = pd.to_datetime(t_df["entry_time"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
-            t_df["entry_time"] = t_df.apply(
-                lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_entry']})'>{row['entry_time_display']}</span>", 
-                axis=1
-            )
-            
-            # Exit Time Link
-            if "exit_time" in t_df.columns:
-                t_df["ts_exit"] = pd.to_datetime(t_df["exit_time"], utc=True).astype('int64') // 10**9
-                t_df["exit_time_display"] = pd.to_datetime(t_df["exit_time"], utc=True).dt.strftime("%Y-%m-%d %H:%M")
-                t_df["exit_time"] = t_df.apply(
-                    lambda row: f"<span class='time-link' onclick='window.scrollToTimestamp({row['ts_exit']})'>{row['exit_time_display']}</span>", 
-                    axis=1
-                )
-
-            # Format columns
-            view_cols = ["entry_time", "exit_time", "side", "entry_price", "exit_price", "return", "holding_mins", "exit_reason"]
-            # Ensure columns exist
-            view_cols = [c for c in view_cols if c in t_df.columns]
-            
-            view_df = t_df[view_cols].copy()
-            # Note: Dates are already formatted as HTML strings above
-            
-            if "return" in view_df.columns:
-                view_df["return"] = view_df["return"].map(lambda x: f"{float(x):.4f}" if pd.notna(x) else "-")
-            if "holding_mins" in view_df.columns:
-                view_df["holding_mins"] = view_df["holding_mins"].map(lambda x: f"{float(x):.1f}" if pd.notna(x) else "-")
-            if "entry_price" in view_df.columns:
-                view_df["entry_price"] = view_df["entry_price"].map(lambda x: f"{float(x):.2f}" if pd.notna(x) else "-")
-            if "exit_price" in view_df.columns:
-                view_df["exit_price"] = view_df["exit_price"].map(lambda x: f"{float(x):.2f}" if pd.notna(x) else "-")
-
-            trades_html = view_df.to_html(classes="data-table", index=False, border=0, escape=False)
+        # using shared utilities from table_html_utils
         
+        metrics_html = generate_metrics_html(self.ctx.metrics_df)
+        dist_html = generate_distribution_html(self.ctx.trades_df)
+        analysis_html = generate_analysis_html(self.ctx.trades_df)
+        trades_html = generate_trades_html(self.ctx.trades_df)        
         # 5. Read Template and Inject
         template_path = Path(__file__).parent / "templates" / "tradingview_report.html"
         if not template_path.exists():
@@ -587,7 +403,7 @@ class ReportEngine:
             "/*INJECT_VOLUME*/": json.dumps(volume_data),
             "/*INJECT_EQUITY*/": json.dumps(equity_data),
             "/*INJECT_BENCHMARK_EQUITY*/": json.dumps(benchmark_data),
-            "/*INJECT_PROB_UNSAFE*/": json.dumps(prob_data),
+            "/*INJECT_VOLATILITY_SCORE*/": json.dumps(prob_data),
             "/*INJECT_SUSPEND_THRESH*/": str(self.ctx.params.get("indicator", {}).get("suspend_threshold", 0.4)),
             "/*INJECT_EJECT_THRESH*/": str(self.ctx.params.get("indicator", {}).get("eject_threshold", 0.8)),
             "/*INJECT_MARKERS*/": json.dumps(markers),
