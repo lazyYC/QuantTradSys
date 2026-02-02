@@ -37,15 +37,7 @@ def build_label_frame(
     low = features["low"].astype(float)
 
     future_window = max(int(params.future_window), 1)
-    
-    # 這裡的 stop_loss_pct 用來定義「什麼是危險波動」
-    # 對於網格來說，如果單邊走勢超過 "網格總寬度" 或 "單筆止損"，就是危險。
-    # 建議使用比單筆止損稍大的值，例如 3~5 倍 ATR 或固定百分比。
-    # 這裡先沿用 params.stop_loss_pct，或建議參數化。
-    # 假設: Unsafe Threshold = 2.0 * ATR? 或者固定 PCT?
-    # 為保持與原參數相容，這裡使用 params.stop_loss_pct * 2.0 作為 "Major Trend Threshold"
-    # 或者直接使用 future_return_threshold 作為 "Volatility Limit"
-    
+        
     vol_threshold = params.future_return_threshold 
     if vol_threshold <= 0:
         vol_threshold = 0.01 # Fallback 1%

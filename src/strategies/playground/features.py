@@ -150,7 +150,7 @@ class StarFeatureCache:
         
         rsi_s = _compute_rsi(close, params.rsi_window)
         frame["rsi"] = rsi_s
-        frame["rsi_slope"] = (rsi_s - rsi_s.shift(3)) / 3.0
+        frame["rsi_slope"] = (rsi_s - rsi_s.shift(15)) / 15.0
         
         # 2. Bollinger Bands
         # _compute_bb returns (upper, middle, lower)
@@ -167,24 +167,24 @@ class StarFeatureCache:
         # Log Returns
         log_ret = np.log(close / close.shift(1).replace(0.0, np.nan))
         frame["log_return_1"] = log_ret
-        frame["log_return_5"] = log_ret.rolling(5).sum()
+        frame["log_return_5"] = log_ret.rolling(25).sum()
         
         # 5. Trend Z-Score (Dynamic Deviation)
         # Calculate std for the trend window specifically to get true Z-Score
         trend_std = close.rolling(window=params.trend_window, min_periods=params.trend_window).std(ddof=0)
         frame["trend_z_score"] = (close - trend_ma) / trend_std.replace(0.0, np.nan)
         
-        # Short-term Deviations
-        ma_5 = close.rolling(window=5, min_periods=5).mean()
-        ma_15 = close.rolling(window=15, min_periods=15).mean()
+        # Short-term Deviations (x5 for 1min)
+        ma_5 = close.rolling(window=25, min_periods=25).mean()
+        ma_15 = close.rolling(window=75, min_periods=75).mean()
         frame["dist_ma_5"] = (close - ma_5) / ma_5.replace(0.0, np.nan)
         frame["dist_ma_15"] = (close - ma_15) / ma_15.replace(0.0, np.nan)
 
         # BB Width Delta
         frame["bb_width_delta"] = (bb_width - bb_width.shift(1)) / bb_width.shift(1).replace(0.0, np.nan)
 
-        # Support/Resistance Features
-        sr_windows = [12, 36, 72, 144, 288]
+        # Support/Resistance Features (x5 for 1min)
+        sr_windows = [60, 180, 360, 720, 1440]
         
         for k in sr_windows:
             roll_high = high.rolling(window=k, min_periods=k).max()
@@ -197,8 +197,8 @@ class StarFeatureCache:
             # High value = Expanded, Low value = Compressed
             frame[f"range_dist_{k}"] = (roll_high - roll_low) / close.replace(0.0, np.nan)
         
-        # Touch Count
-        touch_window = 72
+        # Touch Count (x5 for 1min)
+        touch_window = 360
         threshold_pct = 0.002
 
         roll_min_72 = low.rolling(window=touch_window, min_periods=touch_window).min()

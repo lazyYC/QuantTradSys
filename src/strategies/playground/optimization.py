@@ -117,11 +117,11 @@ def optimize_playground(
 
         cache = StarFeatureCache(
             train_df,
-            trend_windows=list(range(30, 65, 5)),
-            atr_windows=list(range(14, 35, 7)),
-            volatility_windows=list(range(15, 35, 5)),
-            volume_windows=[30, 45, 60],
-            pattern_windows=[3, 4, 5],
+            trend_windows=list(range(150, 325, 25)),  # x5
+            atr_windows=list(range(70, 175, 35)),  # x5
+            volatility_windows=list(range(75, 175, 25)),  # x5
+            volume_windows=[150, 225, 300],  # x5
+            pattern_windows=[15, 20, 25],  # x5
         )
         features = cache.build_features(indicator_params)
         labels, thresholds = build_label_frame(features, indicator_params)
@@ -442,45 +442,45 @@ def suggest_indicator_params(
     Suggest indicator parameters using Optuna.
     If future_window_choices is provided, also suggest future_window and return_threshold (Legacy mode).
     """
+    # Optuna Search Ranges (x5 for 1min timeframe)
     params = dict(
-        trend_window=trial.suggest_int("trend_window", 30, 60, step=5),
-        slope_window=trial.suggest_int("slope_window", 5, 15, step=5),
-        atr_window=trial.suggest_int("atr_window", 14, 28, step=7),
-        volatility_window=trial.suggest_int("volatility_window", 15, 30, step=5),
-        volume_window=trial.suggest_categorical("volume_window", [30, 45, 60]),
-        pattern_lookback=trial.suggest_categorical("pattern_lookback", [3, 4, 5]),
+        trend_window=trial.suggest_int("trend_window", 150, 300, step=25),
+        slope_window=trial.suggest_int("slope_window", 25, 75, step=25),
+        atr_window=trial.suggest_int("atr_window", 70, 140, step=35),
+        volatility_window=trial.suggest_int("volatility_window", 75, 150, step=25),
+        volume_window=trial.suggest_categorical("volume_window", [150, 225, 300]),
+        pattern_lookback=trial.suggest_categorical("pattern_lookback", [15, 20, 25]),
         upper_shadow_min=trial.suggest_float("upper_shadow_min", 0.65, 0.9, step=0.05),
         body_ratio_max=trial.suggest_float("body_ratio_max", 0.16, 0.22, step=0.02),
         volume_ratio_max=trial.suggest_float("volume_ratio_max", 0.55, 0.8, step=0.05),
     )
-    
-    # Optimize Target Parameters
-    # future_window: 1h to 3h (12 to 36 bars of 5m) - Narrowed to avoid noise
-    params["future_window"] = trial.suggest_int("future_window", 12, 36, step=6)
+
+    # Optimize Target Parameters (x5 for 1min)
+    # future_window: 1h to 3h (60 to 180 bars of 1m)
+    params["future_window"] = trial.suggest_int("future_window", 60, 180, step=30)
     
     # future_return_threshold: 1.5% to 3.0%
     # [MODIFIED v1.8.1] User feedback: Target "True" volatility (Big Moves).
     # If set too low, we catch noise.
     params["future_return_threshold"] = trial.suggest_float(
-        "future_return_threshold", 0.015, 0.030, step=0.002
+        "future_return_threshold", 0.01, 0.04, step=0.003
     )
 
-    # Fixed Parameters for Momentum/Volatility
-    # We inject them here so they are carried over to the engine's params
+    # Fixed Parameters for Momentum/Volatility (x5 for 1min timeframe)
     params.update({
-        "rsi_window": 14,
-        "macd_fast": 12,
-        "macd_slow": 26,
-        "macd_signal": 9,
-        "bb_window": 20,
+        "rsi_window": 70,
+        "macd_fast": 60,
+        "macd_slow": 130,
+        "macd_signal": 45,
+        "bb_window": 100,
         "bb_std": 2.0,
-        "max_open_trades": 1,  # Single Bullet Strategy
+        "max_open_trades": 1,
         "max_global_drawdown_pct": 0.05,
-        "require_candle_confirmation": False, 
+        "require_candle_confirmation": False,
     })
-    
-    # v1.8.0 Volatility Breakout Optimization
-    params["breakout_window"] = trial.suggest_int("breakout_window", 20, 100, step=10)
+
+    # v1.8.0 Volatility Breakout Optimization (x5 for 1min)
+    params["breakout_window"] = trial.suggest_int("breakout_window", 100, 500, step=50)
     params["atr_trailing_mult"] = trial.suggest_float("atr_trailing_mult", 2.0, 6.0, step=0.5)
     params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.5, 0.85, step=0.05)
     
