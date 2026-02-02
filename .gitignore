@@ -89,3 +89,5 @@ config/.env
 sqlite_exec.py
 /.agent/
 
+ALPHA*.md
+*.sql
