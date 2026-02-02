@@ -314,18 +314,18 @@ def _simulate_trades(
         subset=["timestamp", "close", "volatility_score"]
     )
 
-    # --- Strategy Parameters (v1.8.0 Volatility Breakout) ---
+    # --- Strategy Parameters (x5 for 1min timeframe) ---
     ind_params = indicator_params if indicator_params else StarIndicatorParams(
-        trend_window=200, slope_window=20, atr_window=14, volatility_window=20,
-        volume_window=20, pattern_lookback=3, upper_shadow_min=0.65, 
-        body_ratio_max=0.3, volume_ratio_max=0.6, future_window=12, future_return_threshold=0.01
+        trend_window=1000, slope_window=100, atr_window=70, volatility_window=100,
+        volume_window=100, pattern_lookback=15, upper_shadow_min=0.65,
+        body_ratio_max=0.3, volume_ratio_max=0.6, future_window=60, future_return_threshold=0.01
     )
-    
+
     atr_mult = getattr(ind_params, "atr_trailing_mult", 3.0)
     trigger_thresh = getattr(ind_params, "trigger_threshold", 0.6)
-    
+
     # Bollinger Bands
-    bb_window = getattr(ind_params, "bb_window", 20)
+    bb_window = getattr(ind_params, "bb_window", 100)
     bb_std = getattr(ind_params, "bb_std", 2.0)
     roll_mean = frame["close"].rolling(bb_window).mean().shift(1)
     roll_std = frame["close"].rolling(bb_window).std(ddof=0).shift(1)
@@ -335,7 +335,7 @@ def _simulate_trades(
     # ATR
     if "atr" not in frame.columns:
         tr = np.maximum(frame["high"] - frame["low"], np.abs(frame["high"] - frame["close"].shift(1)))
-        frame["atr"] = tr.rolling(14).mean().bfill()
+        frame["atr"] = tr.rolling(70).mean().bfill()
         
     records = []
     open_trades: List[Dict] = []
@@ -372,7 +372,10 @@ def _simulate_trades(
         vol_force_ma = np.zeros(len(closes))
     
     max_open = ind_params.max_open_trades
-
+    
+    # Cooldown tracking: prevent same-side re-entry on same bar after stop-loss
+    cooldown_bar_idx = -1
+    cooldown_side = None
 
     for i in range(len(closes)):
         current_time = timestamps[i]
@@ -401,7 +404,7 @@ def _simulate_trades(
                 # Check exit condition first to ensure safety (prevent self-sabotage on big candles)
                 if low_price <= prev_stop:
                     should_exit = True
-                    exit_fill_price = prev_stop
+                    exit_fill_price = close_price  # Exit at bar close (actual trading logic)
                 else:
                     # If Safe -> Update for NEXT bar
                     if high_price > highest_high:
@@ -417,7 +420,7 @@ def _simulate_trades(
                 # Check Exit First
                 if high_price >= prev_stop:
                     should_exit = True
-                    exit_fill_price = prev_stop
+                    exit_fill_price = close_price  # Exit at bar close (actual trading logic)
                 else:
                     # If Safe -> Update for NEXT bar
                     if low_price < lowest_low:
@@ -460,6 +463,9 @@ def _simulate_trades(
                     "entry_zscore": 0.0,
                     "exit_zscore": 0.0,
                 })
+                # Set cooldown to prevent same-side re-entry on same bar
+                cooldown_bar_idx = i
+                cooldown_side = side
             else:
                 new_open_trades.append(t)
         
@@ -502,13 +508,18 @@ def _simulate_trades(
             # Action Condition: Bollinger Band Breakout
             # DH/DL are now BB Upper/Lower
             
-            # Long Breakout (Close > BB Upper)
-            if close_price > dh and not np.isnan(dh):
+            # Long Breakout (High touches BB Upper = Intrabar Breakout)
+            if high_price > dh and not np.isnan(dh):
                 if not trend_ok_long or not vol_ok_long:
                     continue
-                    
+                
+                # Cooldown check: skip if just stopped out from LONG on this bar
+                if cooldown_bar_idx == i and cooldown_side == "LONG":
+                    continue
+
                 has_long = any(t["side"] == "LONG" for t in open_trades)
                 if not has_long:
+                    # Entry at close (we only know breakout happened at bar close)
                     init_stop = close_price - (atr * atr_mult)
                     open_trades.append({
                         "side": "LONG",
@@ -516,17 +527,22 @@ def _simulate_trades(
                         "entry_price": close_price,
                         "entry_volatility_score": prob,
                         "entry_class": 1,
-                        "highest_high": close_price,
+                        "highest_high": high_price,
                         "stop_price": init_stop,
                     })
             
-            # Short Breakout (Close < BB Lower)
-            elif close_price < dl and not np.isnan(dl):
+            # Short Breakout (Low touches BB Lower = Intrabar Breakout)
+            elif low_price < dl and not np.isnan(dl):
                 if not trend_ok_short or not vol_ok_short:
                     continue
-                    
+                
+                # Cooldown check: skip if just stopped out from SHORT on this bar
+                if cooldown_bar_idx == i and cooldown_side == "SHORT":
+                    continue
+
                 has_short = any(t["side"] == "SHORT" for t in open_trades)
                 if not has_short:
+                    # Entry at close (we only know breakout happened at bar close)
                     init_stop = close_price + (atr * atr_mult)
                     open_trades.append({
                         "side": "SHORT",
@@ -534,7 +550,7 @@ def _simulate_trades(
                         "entry_price": close_price,
                         "entry_volatility_score": prob,
                         "entry_class": 1,
-                        "lowest_low": close_price,
+                        "lowest_low": low_price,
                         "stop_price": init_stop,
                     })
 
