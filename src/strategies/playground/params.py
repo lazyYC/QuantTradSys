@@ -23,29 +23,29 @@ class StarIndicatorParams:
     volume_ratio_max: float
     future_window: int
     future_return_threshold: float
-    
-    # Momentum / Volatility
-    rsi_window: int = 14
-    macd_fast: int = 12
-    macd_slow: int = 26
-    macd_signal: int = 9
-    bb_window: int = 20
+
+    # Momentum / Volatility (x5 for 1min timeframe)
+    rsi_window: int = 70
+    macd_fast: int = 60
+    macd_slow: int = 130
+    macd_signal: int = 45
+    bb_window: int = 100
     bb_std: float = 2.0
     stop_loss_pct: Optional[float] = None
-    
+
     # New Risk Controls
     adx_threshold: float = 30.0
-    max_open_trades: int = 1 # One trade at a time per side per coin? Or keeping max 25 for scale? Let's keep 25.
+    max_open_trades: int = 1
     max_global_drawdown_pct: float = 0.02
     require_candle_confirmation: bool = True
-    
-    # Volatility Breakout Controls
-    breakout_window: int = 20
+
+    # Volatility Breakout Controls (x5 for 1min timeframe)
+    breakout_window: int = 100
     atr_trailing_mult: float = 3.0
     trigger_threshold: float = 0.6
 
-    # Hard-Filters
-    trend_ema_window: int = 200
+    # Hard-Filters (x5 for 1min timeframe)
+    trend_ema_window: int = 1000
     require_trend_alignment: bool = False
     adx_min: float = 0.0
     volume_confirmation: bool = False

@@ -35,15 +35,15 @@ def _parse_args() -> argparse.Namespace:
     
     parser.add_argument("--strategy", type=str, required=True, help="Strategy to train (must match folder name in src/strategies/)")
     parser.add_argument("--symbol", type=str, default="BTC/USDT:USDT")
-    parser.add_argument("--timeframe", type=str, default="5m")
+    parser.add_argument("--timeframe", type=str, default="1m")
     parser.add_argument("--lookback-days", type=int, default=360)
     parser.add_argument("--exchange", type=str, default="binanceusdm")
     parser.add_argument("--transaction-cost", type=float, default=0.001)
     parser.add_argument("--stop-loss-pct", type=float, default=0.005)
     parser.add_argument("--valid-days", type=int, default=30)
     
-    # Target Definition (Fixed)
-    parser.add_argument("--future-window", type=int, default=5, help="Fixed prediction horizon (bars)")
+    # Target Definition (Fixed, x5 for 1min timeframe)
+    parser.add_argument("--future-window", type=int, default=60, help="Fixed prediction horizon (bars)")
     parser.add_argument("--future-return-threshold", type=float, default=0, help="Fixed return threshold")
     
     # Optimization Config

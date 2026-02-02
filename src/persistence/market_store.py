@@ -93,7 +93,8 @@ class MarketDataStore:
                      o, h, l, c, v = row[2:7]
                  elif len(row) == 6:
                      ts_ms = int(row[0])
-                     iso_ts = None # Let DB default or fill
+                     # Generate iso_ts from ts_ms
+                     iso_ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
                      o, h, l, c, v = row[1:6]
                  else:
                      continue
@@ -113,22 +114,33 @@ class MarketDataStore:
         if not clean_records:
             return 0
 
-        # Postgres Upsert
-        with get_session() as session:
-            stmt = insert(OHLCV).values(clean_records)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["symbol", "timeframe", "ts"],
-                set_={
-                    "open": stmt.excluded.open,
-                    "high": stmt.excluded.high,
-                    "low": stmt.excluded.low,
-                    "close": stmt.excluded.close,
-                    "volume": stmt.excluded.volume,
-                    "iso_ts": stmt.excluded.iso_ts,
-                }
-            )
-            result = session.execute(stmt)
-            return result.rowcount
+        # Batch insert to avoid PostgreSQL parameter limit (65535)
+        # 9 columns per row → max ~7000 rows per batch, use 5000 for safety
+        BATCH_SIZE = 5000
+        total_count = 0
+        
+        for i in range(0, len(clean_records), BATCH_SIZE):
+            batch = clean_records[i:i + BATCH_SIZE]
+            with get_session() as session:
+                stmt = insert(OHLCV).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["symbol", "timeframe", "ts"],
+                    set_={
+                        "open": stmt.excluded.open,
+                        "high": stmt.excluded.high,
+                        "low": stmt.excluded.low,
+                        "close": stmt.excluded.close,
+                        "volume": stmt.excluded.volume,
+                        "iso_ts": stmt.excluded.iso_ts,
+                    }
+                )
+                result = session.execute(stmt)
+                total_count += result.rowcount
+            
+            if (i + BATCH_SIZE) % 50000 == 0:
+                LOGGER.info(f"Upsert progress: {i + BATCH_SIZE}/{len(clean_records)}")
+                
+        return total_count
 
     def load_candles(
         self,

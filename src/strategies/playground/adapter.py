@@ -92,14 +92,14 @@ class PlaygroundStrategy(BaseStrategy):
         Initialize the feature cache with all possible window sizes defined in the search space.
         This avoids re-calculating rolling windows for every trial.
         """
-        # Hardcoded search space for now, or could be passed in config.
-        # These match the ranges in get_optuna_params
-        trend_windows = list(range(30, 65, 5))
-        slope_windows = list(range(5, 20, 5))
-        atr_windows = list(range(14, 35, 7))
-        volatility_windows = list(range(15, 35, 5))
-        volume_windows = [30, 45, 60]
-        pattern_windows = [3, 4, 5]
+        # Hardcoded search space (x5 for 1min timeframe)
+        # These match the ranges in optimization.py suggest_indicator_params
+        trend_windows = list(range(150, 325, 25))
+        slope_windows = list(range(25, 100, 25))
+        atr_windows = list(range(70, 175, 35))
+        volatility_windows = list(range(75, 175, 25))
+        volume_windows = [150, 225, 300]
+        pattern_windows = [15, 20, 25]
         
         LOGGER.info("Warming up StarFeatureCache...")
         self._cache = StarFeatureCache(
