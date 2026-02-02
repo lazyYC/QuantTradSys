@@ -26,6 +26,7 @@ from persistence.param_store import load_strategy_params
 from strategies.base import BaseStrategy
 from reporting.chart_utils import format_candles, format_volume, format_equity, format_signals, format_markers
 from reporting.table_html_utils import generate_metrics_html, generate_distribution_html, generate_analysis_html, generate_trades_html
+from utils.trading import build_equity_from_trades
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
@@ -193,7 +194,9 @@ async def run_simulation(params: SimParams):
     candle_data = format_candles(vis_candles)
     volume_data = format_volume(vis_candles)
     
-    equity_data = format_equity(result.equity_curve)
+    # Build Mark-to-Market equity curve (same as report.py)
+    equity_df = build_equity_from_trades(result.trades, vis_candles)
+    equity_data = format_equity(equity_df)
     
     # Check signals
     prob_data = []

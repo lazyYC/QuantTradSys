@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import lightgbm as lgb
 import numpy as np
@@ -138,6 +138,7 @@ def backtest_star_xgb(
             transaction_cost=transaction_cost,
         )
         trades = pd.DataFrame() 
+        equity_curve = pd.DataFrame(columns=["timestamp", "equity"])
     else:
         metrics = _evaluate(
             dataset,
@@ -149,7 +150,7 @@ def backtest_star_xgb(
             min_hold_bars=indicator_params.future_window,
         )
 
-        trades = _build_signal_records(
+        trades, equity_curve = _build_signal_records(
             dataset,
             feature_columns,
             booster,
@@ -167,7 +168,7 @@ def backtest_star_xgb(
         entry_times = pd.to_datetime(trades["entry_time"], utc=True, errors="coerce")
         trades = trades[entry_times >= core_start_ts].reset_index(drop=True)
 
-    equity_curve = _build_equity_curve(trades)
+    # equity_curve already computed from _simulate_trades (per-bar equity)
     if not equity_curve.empty:
         equity_curve["timestamp"] = pd.to_datetime(equity_curve["timestamp"], utc=True)
 
@@ -269,10 +270,10 @@ def _build_signal_records(
     transaction_cost: float = 0.0,
     stop_loss_pct: Optional[float] = None,
     min_hold_bars: int = 0,
-) -> pd.DataFrame:
-    """從模型預測中建立交易記錄。"""
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """從模型預測中建立交易記錄。Returns (trades, equity_curve)."""
     if dataset.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(columns=["timestamp", "equity"])
 
     if predicted_probs is None:
         features = dataset[feature_columns].to_numpy(dtype=float, copy=False)
@@ -296,7 +297,7 @@ def _build_signal_records(
     # because model.py's _simulate_trades expects "expected_returns" to be the signal for Eject/Suspend
     # See model.py line 303: frame["volatility_score"] = expected_returns
     
-    trades = _simulate_trades(
+    trades, equity_curve = _simulate_trades(
         dataset,
         volatility_score, # PASS PROBABILITY HERE
         pred_class,
@@ -306,7 +307,7 @@ def _build_signal_records(
         stop_loss_pct=stop_loss_pct,
         min_hold_bars=min_hold_bars,
     )
-    return trades
+    return trades, equity_curve
 
 
 def _build_equity_curve(trades: pd.DataFrame) -> pd.DataFrame:

@@ -179,7 +179,7 @@ def train_star_model(
     if not train_df.empty and train_probs.size:
         train_expected = _expected_returns(train_probs, class_means)
         train_pred_classes = CLASS_VALUES[np.argmax(train_probs, axis=1)]
-        train_trades = _simulate_trades(
+        train_trades, _ = _simulate_trades(
             train_df,
             train_expected,
             train_pred_classes,
@@ -282,8 +282,13 @@ def _simulate_trades(
     stop_loss_pct: Optional[float] = None,
     min_hold_bars: int = 0,
     profit_ratio: float = 0.4,
-) -> pd.DataFrame:
-    """執行波動突破模擬交易：ML 預測高波動 → BB 突破進場 → ATR 追蹤止損。"""
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """執行波動突破模擬交易：ML 預測高波動 → BB 突破進場 → ATR 追蹤止損。
+    
+    Returns:
+        Tuple of (trades_df, equity_curve_df)
+        equity_curve_df: per-bar equity = cash + position_market_value
+    """
     trade_columns = [
         "side",
         "entry_time",
@@ -339,6 +344,12 @@ def _simulate_trades(
         
     records = []
     open_trades: List[Dict] = []
+
+    # Equity tracking: cash + position market value
+    cash = 1.0  # Start with normalized equity of 1.0
+    position_qty = 0.0  # Positive for LONG, negative for SHORT
+    position_entry_price = 0.0
+    equity_records = []  # (timestamp, equity)
     
     # Extract Arrays for Speed
     timestamps = frame["timestamp"].values
@@ -466,6 +477,8 @@ def _simulate_trades(
                 # Set cooldown to prevent same-side re-entry on same bar
                 cooldown_bar_idx = i
                 cooldown_side = side
+                # Update cash with realized PnL
+                cash = cash * (1 + ret)
             else:
                 new_open_trades.append(t)
         
@@ -554,6 +567,20 @@ def _simulate_trades(
                         "stop_price": init_stop,
                     })
 
+        # --- 3. Calculate per-bar equity ---
+        # equity = cash + position_market_value
+        position_value = 0.0
+        if open_trades:
+            # Since strategy doesn't stack, we compute PnL for first trade only
+            t = open_trades[0]
+            entry = t["entry_price"]
+            if t["side"] == "LONG":
+                position_value = cash * (close_price - entry) / entry
+            else:  # SHORT
+                position_value = cash * (entry - close_price) / entry
+        equity = cash + position_value
+        equity_records.append({"timestamp": current_time, "equity": equity})
+
     # Cleanup Exit
     if open_trades:
         last_row = frame.iloc[-1]
@@ -581,7 +608,9 @@ def _simulate_trades(
                 "exit_zscore": 0.0,
             })
 
-    return pd.DataFrame.from_records(records, columns=trade_columns)
+    trades_df = pd.DataFrame.from_records(records, columns=trade_columns)
+    equity_df = pd.DataFrame(equity_records)
+    return trades_df, equity_df
 
 
 def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
@@ -778,7 +807,7 @@ def _evaluate(
     recall = float(recall_score(y_true, preds, zero_division=0))
     
     # Simulation
-    trades = _simulate_trades(
+    trades, _ = _simulate_trades(
         df,
         volatility_score,
         preds,
