@@ -186,13 +186,13 @@ def run_grid_search(
     LOGGER.info(f"Splits Prepared: Train={len(train_input)} (Core={len(train_raw)}), Valid={len(valid_input)} (Core={len(valid_raw)}), Test={len(test_input)} (Core={len(test_raw)})")
     
     # Define Grid
-    triggers = [0.6, 0.70, 0.8]
+    triggers = [0.6, 0.65, 0.70, 0.75, 0.8]
     bb_stds = [1.8, 2.0, 2.2]
     
-    atr_mults = [3.0, 4.0, 5.0]
+    atr_mults = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
     
     # New Filter Params
-    adx_mins = [20.0, 25.0]
+    adx_mins = [20.0, 25.0, 30.0, 40.0]
     trend_aligns = [True] # Force trend alignment for safety in chop
     
     grid = list(itertools.product(triggers, bb_stds, atr_mults, adx_mins, trend_aligns))
