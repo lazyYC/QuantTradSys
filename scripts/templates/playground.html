@@ -61,7 +61,7 @@
         }
 
         #chart-container {
-            height: 600px;
+            height: 800px;
             /* Fixed height for chart */
             background-color: #1e1e1e;
             border: 1px solid #333;
@@ -396,6 +396,10 @@
                 if (data.signals) volSeries.setData(data.signals);
                 candlestickSeries.setMarkers(data.markers);
 
+                // Store for dynamic re-basing
+                globalCandleData = data.candles;
+                globalEquityData = data.equity || [];
+
                 // Re-base Equity
                 if (data.equity && data.equity.length > 0 && data.candles.length > 0) {
                     const startEquity = data.equity[0].value;
@@ -446,6 +450,55 @@
                 chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
             }, 300); // Wait for transition
         });
+
+        // ------------------------------------------
+        // Dynamic Re-basing on Scroll/Zoom
+        // ------------------------------------------
+        let globalEquityData = [];
+        let globalCandleData = [];
+        let isUpdatingEquity = false;
+        let rebaseTimer = null;
+
+        function rebaseEquity() {
+            if (isUpdatingEquity) return;
+            if (globalEquityData.length === 0 || globalCandleData.length === 0) return;
+
+            // Use time-based range instead of index-based for reliability
+            const range = chart.timeScale().getVisibleRange();
+            if (!range) return;
+
+            const visibleStartTime = range.from;
+            const firstEquityTime = globalEquityData[0].time;
+
+            // Find the first candle that is visible
+            const firstVisibleCandle = globalCandleData.find(c => c.time >= visibleStartTime);
+            if (!firstVisibleCandle) return;
+
+            const alignmentTime = Math.max(firstVisibleCandle.time, firstEquityTime);
+
+            const refCandle = globalCandleData.find(c => c.time >= alignmentTime);
+            const refEquity = globalEquityData.find(e => e.time >= alignmentTime);
+
+            if (!refCandle || !refEquity) return;
+            if (refEquity.value <= 0) return;
+
+            const newFactor = refCandle.close / refEquity.value;
+            const rebased = globalEquityData.map(d => ({
+                time: d.time,
+                value: d.value * newFactor
+            }));
+
+            isUpdatingEquity = true;
+            equitySeries.setData(rebased);
+            isUpdatingEquity = false;
+        }
+
+        function handleRangeChange() {
+            if (rebaseTimer) clearTimeout(rebaseTimer);
+            rebaseTimer = setTimeout(rebaseEquity, 100);  // 100ms debounce
+        }
+
+        chart.timeScale().subscribeVisibleLogicalRangeChange(handleRangeChange);
 
         runSimulation(); // Auto-run on load
 
