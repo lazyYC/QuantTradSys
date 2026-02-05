@@ -22,7 +22,7 @@ from .dataset import (
 from .labels import RETURN_CLASSES
 from .params import StarIndicatorParams, StarModelParams
 
-CLASS_VALUES = np.array(RETURN_CLASSES, dtype=float)
+CLASS_VALUES = np.array(RETURN_CLASSES, dtype=int)
 NUM_CLASSES = len(CLASS_VALUES)
 
 
@@ -273,7 +273,7 @@ def export_rankings(rankings: Sequence[Dict[str, object]], path: Path) -> Path:
 
 def _simulate_trades(
     df: pd.DataFrame,
-    expected_returns: np.ndarray,
+    probs: np.ndarray, # Changed name from expected_returns (N, 3) or (N, )
     pred_classes: np.ndarray,
     params: StarModelParams,
     *,
@@ -283,7 +283,7 @@ def _simulate_trades(
     min_hold_bars: int = 0,
     profit_ratio: float = 0.4,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """執行波動突破模擬交易：ML 預測高波動 → BB 突破進場 → ATR 追蹤止損。
+    """執行方向性趨勢模擬交易：ML 預測趨勢 → BB 突破確認 → ATR 追蹤止損。
     
     Returns:
         Tuple of (trades_df, equity_curve_df)
@@ -297,8 +297,9 @@ def _simulate_trades(
         "exit_price",
         "return",
         "holding_mins",
-        "entry_volatility_score", # Replaces entry_expected_return
-        "exit_volatility_score",  # Replaces exit_expected_return
+        "holding_mins",
+        "entry_prob", # Replaces entry_volatility_score
+        "exit_prob",  # Replaces exit_volatility_score
         "entry_class",
         "exit_class",
         "exit_reason",
@@ -312,11 +313,29 @@ def _simulate_trades(
     frame = frame.sort_values("timestamp").reset_index(drop=True)
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
     
-    frame["volatility_score"] = expected_returns
+    # Store probability vector
+    # If using 2-class, probs might be 1D. If 3-class, it is (N, 3).
+    # We need robust handling.
+    # Assuming caller passes the full probability matrix or appropriate column
+    
+    # Check shape
+    prob_bull = np.zeros(len(frame))
+    prob_bear = np.zeros(len(frame))
+    
+    if probs.ndim == 2 and probs.shape[1] >= 3:
+        prob_bull = probs[:, 1]
+        prob_bear = probs[:, 2]
+    elif probs.ndim == 1:
+        # Fallback for legacy 2-class or single column passing
+        prob_bull = probs
+        prob_bear = probs # If it was volatility, implies both invalid?
+    
+    frame["prob_bull"] = prob_bull
+    frame["prob_bear"] = prob_bear
     frame["predicted_class_sim"] = pred_classes
 
     frame = frame.dropna(
-        subset=["timestamp", "close", "volatility_score"]
+        subset=["timestamp", "close"]
     )
 
     # --- Strategy Parameters (x5 for 1min timeframe) ---
@@ -358,7 +377,8 @@ def _simulate_trades(
     lows = frame["low"].values
     bb_uppers = frame["bb_upper"].values
     bb_lowers = frame["bb_lower"].values
-    probs = frame["volatility_score"].values
+    prob_bulls = frame["prob_bull"].values
+    prob_bears = frame["prob_bear"].values
     atrs = frame["atr"].values
     
     # --- Feature Extraction for Filters ---
@@ -395,7 +415,8 @@ def _simulate_trades(
         low_price = lows[i]
         dh = bb_uppers[i] # Alias for consistency
         dl = bb_lowers[i] # Alias for consistency
-        prob = probs[i]
+        p_bull = prob_bulls[i]
+        p_bear = prob_bears[i]
         atr = atrs[i]
         
         # --- 1. Manage Open Trades (Trailing Stop) ---
@@ -466,8 +487,8 @@ def _simulate_trades(
                     "exit_price": exit_fill,
                     "return": ret,
                     "holding_mins": delta.total_seconds() / 60.0,
-                    "entry_volatility_score": t["entry_volatility_score"],
-                    "exit_volatility_score": prob,
+                    "entry_prob": t["entry_prob"],
+                    "exit_prob": p_bull if side == "LONG" else p_bear,
                     "entry_class": t["entry_class"],
                     "exit_class": 0,
                     "exit_reason": exit_reason,
@@ -491,78 +512,44 @@ def _simulate_trades(
             continue
             
         # Trigger Condition: AI says "Unsafe" (High Volatility Incoming)
-        if prob > trigger_thresh:
-            
-            # --- Hard Filters Check ---
-            
-            # 1. ADX Filter (Avoid Choppy "Breakouts")
-            if adx_values[i] < adx_min:
-                continue
-                
-            # 2. Trend Alignment (Long only if > EMA, Short only if < EMA)
-            trend_ok_long = True
-            trend_ok_short = True
-            if getattr(ind_params, "require_trend_alignment", False):
-                trend_val = trend_ema[i]
-                if close_price < trend_val:
-                    trend_ok_long = False
-                if close_price > trend_val:
-                    trend_ok_short = False
-            
-            # 3. Volume Confirmation (Volume Force > Avg)
-            vol_ok_long = True
-            vol_ok_short = True
-            if getattr(ind_params, "volume_confirmation", False):
-                vf = vol_force[i]
-                vf_ma = abs(vol_force_ma[i])
-                if vf <= 0: vol_ok_long = False
-                if vf >= 0: vol_ok_short = False
+        # Trigger Condition: Directional Bias Check
+        is_bull_signal = p_bull > trigger_thresh
+        is_bear_signal = p_bear > trigger_thresh
 
-            # Action Condition: Bollinger Band Breakout
-            # DH/DL are now BB Upper/Lower
-            
-            # Long Breakout (High touches BB Upper = Intrabar Breakout)
-            if high_price > dh and not np.isnan(dh):
-                if not trend_ok_long or not vol_ok_long:
-                    continue
-                
-                # Cooldown check: skip if just stopped out from LONG on this bar
-                if cooldown_bar_idx == i and cooldown_side == "LONG":
-                    continue
+        # Action Condition: Model Signal Only (Pure Directional Entry)
 
+        # Action Condition: Model Signal Only (Pure Directional Entry)
+        
+        # Long Logic
+        if is_bull_signal:
+            # Cooldown check
+            if not (cooldown_bar_idx == i and cooldown_side == "LONG"):
                 has_long = any(t["side"] == "LONG" for t in open_trades)
                 if not has_long:
-                    # Entry at close (we only know breakout happened at bar close)
                     init_stop = close_price - (atr * atr_mult)
                     open_trades.append({
                         "side": "LONG",
                         "entry_time": current_time,
                         "entry_price": close_price,
-                        "entry_volatility_score": prob,
+                        "entry_prob": p_bull,
                         "entry_class": 1,
                         "highest_high": high_price,
                         "stop_price": init_stop,
                     })
-            
-            # Short Breakout (Low touches BB Lower = Intrabar Breakout)
-            elif low_price < dl and not np.isnan(dl):
-                if not trend_ok_short or not vol_ok_short:
-                    continue
-                
-                # Cooldown check: skip if just stopped out from SHORT on this bar
-                if cooldown_bar_idx == i and cooldown_side == "SHORT":
-                    continue
-
+        
+        # Short Logic
+        if is_bear_signal:
+            # Cooldown check
+            if not (cooldown_bar_idx == i and cooldown_side == "SHORT"):
                 has_short = any(t["side"] == "SHORT" for t in open_trades)
                 if not has_short:
-                    # Entry at close (we only know breakout happened at bar close)
                     init_stop = close_price + (atr * atr_mult)
                     open_trades.append({
                         "side": "SHORT",
                         "entry_time": current_time,
                         "entry_price": close_price,
-                        "entry_volatility_score": prob,
-                        "entry_class": 1,
+                        "entry_prob": p_bear,
+                        "entry_class": 2,
                         "lowest_low": low_price,
                         "stop_price": init_stop,
                     })
@@ -599,8 +586,8 @@ def _simulate_trades(
                 "exit_price": last_price,
                 "return": ret,
                 "holding_mins": 0.0,
-                "entry_volatility_score": t["entry_volatility_score"],
-                "exit_volatility_score": 0.0,
+                "entry_prob": t["entry_prob"],
+                "exit_prob": 0.0,
                 "entry_class": t["entry_class"],
                 "exit_class": 0,
                 "exit_reason": "end_of_data",
@@ -665,7 +652,7 @@ def _summarize_trades(trades: pd.DataFrame) -> Dict[str, float]:
             summary[f"{key}_win_rate"] = float((side_returns > 0).mean())
             
             # Use new column name, fallback to old if missing
-            col_name = "entry_volatility_score" if "entry_volatility_score" in trades.columns else "entry_expected_return"
+            col_name = "entry_prob" if "entry_prob" in trades.columns else "entry_volatility_score"
             expected_series = pd.to_numeric(
                 trades.loc[mask, col_name], errors="coerce"
             ).dropna()
@@ -787,29 +774,44 @@ def _evaluate(
         metrics["score"] = 0.0
         return metrics
 
-    # Probs is [N, 2] usually. We want Prob(Unsafe) = Prob(1)
-    # If using LightGBM multiclass=2, it returns [Prob0, Prob1].
-    volatility_score = probs[:, 1]
+    # Probs is [N, 3] for 3 classes.
+    # We define accuracy based on our specific Actionable Threshold Logic.
     
-    # Predict based on Decision Threshold
-    preds = (volatility_score > params.decision_threshold).astype(int)
+    # 3-Class Logic:
+    # 0 = Noise, 1 = Bull, 2 = Bear
+    # Predictions depends on threshold
+    
+    # Default selection: Argmax? Or Threshold?
+    # Training usually uses standard argmax for accuracy, but we care about threshold.
+    # Let's use Argmax for standard metrics.
+    
+    preds = np.argmax(probs, axis=1)
     y_true = df[TARGET_COLUMN].to_numpy()
     
-    from sklearn.metrics import accuracy_score, precision_score, recall_score
-    accuracy = float(accuracy_score(y_true, preds))
+    # Calculate weighted accuracy or per-class accuracy
+    from sklearn.metrics import classification_report
+    
+    report = {}
+    try:
+        report = classification_report(y_true, preds, output_dict=True, zero_division=0)
+    except Exception:
+        pass
+        
+    accuracy = report.get("accuracy", 0.0)
     
     # Binary Metrics (Positive Class = Unsafe)
     # True Positive = Predicted Unsafe AND Is Unsafe (Good detection)
     # False Negative = Predicted Safe BUT Is Unsafe (Missed Trend -> Disaster)
     # False Positive = Predicted Unsafe BUT Is Safe (False Alarm -> Opportunity Cost)
     
-    precision = float(precision_score(y_true, preds, zero_division=0))
-    recall = float(recall_score(y_true, preds, zero_division=0))
+    # Use Weighted Average for multi-class metrics summary
+    precision = report.get("weighted avg", {}).get("precision", 0.0)
+    recall = report.get("weighted avg", {}).get("recall", 0.0)
     
     # Simulation
     trades, _ = _simulate_trades(
         df,
-        volatility_score,
+        probs, # Pass full probs
         preds,
         params,
         indicator_params=indicator_params,

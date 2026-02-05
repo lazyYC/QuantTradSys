@@ -266,12 +266,5 @@ class PlaygroundStrategy(BaseStrategy):
             core_start=core_start,
         )
 
-        # [MODIFIED v1.8.0] Removed Pure Grid Benchmark reference as we pivot to Breakout.
-        # if not indicator_params.pure_grid:
-        #     bench_params = params.copy()
-        #     ...
-        #     bench_result = backtest_star_xgb(...)
-        #     main_result.benchmark_equity_curve = bench_result.equity_curve
-            
         return main_result
 

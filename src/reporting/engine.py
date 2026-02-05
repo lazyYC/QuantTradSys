@@ -277,7 +277,7 @@ class ReportEngine:
 
         # [MANUAL OVERRIDE] Hardcoded parameters to verify backtest consistency with Grid Search results
         # These values mimic the "best" or "aggressive" settings found during grid search (e.g. trigger=0.6)
-        # self.ctx.params["trigger_threshold"] = 0.75
+        # self.ctx.params["trigger_threshold"] = 0.6
         # self.ctx.params["bb_std"] = 2
         # self.ctx.params["atr_trailing_mult"] = 4.5
         # self.ctx.params["adx_min"] = 30

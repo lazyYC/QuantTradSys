@@ -9,8 +9,8 @@ import pandas as pd
 
 from .params import StarIndicatorParams
 
-# 2 Classes: 0 (Safe/Range), 1 (Unsafe/Trend)
-RETURN_CLASSES = (0, 1)
+# 3 Classes: 0 (Noise/Range), 1 (Bull Trend), 2 (Bear Trend)
+RETURN_CLASSES = (0, 1, 2)
 
 
 def build_label_frame(
@@ -20,12 +20,16 @@ def build_label_frame(
     thresholds: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, float]]:
     """
-    根據 Volatility & Breakout 邏輯建立標籤。
-    Target: Binary Unsafe Regime
+    根據 Directional & Clean Move 邏輯建立標籤。
+    Target: 3-Class Directional Trend
     Logic:
-        - Unsafe (1): 如果在未來窗口內，價格波動(最大回撤或最大漲幅)超過 Stop Loss 閾值。
-              這代表「即使做網格也會被 Stop Loss 掃出場」的危險區域。
-        - Safe (0): 價格保持在區間內，適合網格收租。
+        - Class 0 (Noise): 震盪、盤整或擴張形雙巴盤 (Up & Down both high)。
+        - Class 1 (Bull): MaxUpside > Threshold AND MaxDownside < StopLoss. (Clean Uptrend)
+        - Class 2 (Bear): MaxDownside > Threshold AND MaxUpside < StopLoss. (Clean Downtrend)
+        
+    Rationale:
+        我們只學習「乾淨的趨勢」。如果一個 Window 內同時觸發止盈與止損 (Expanded Volatility)，
+        依靠簡單規則(BB)極易被掃出場，因此歸類為 Noise (Class 0)，不予交易。
     """
     required = {"timestamp", "close", "high", "low"}
     missing = required.difference(features.columns)
@@ -42,6 +46,11 @@ def build_label_frame(
     if vol_threshold <= 0:
         vol_threshold = 0.01 # Fallback 1%
 
+    # Use Stop Loss as the invalidation barrier
+    # Default to 0.5% if not specified, or use a reasonable fraction of target if preferred.
+    # Here we stick to the params or a default safety net.
+    stop_loss = params.stop_loss_pct if params.stop_loss_pct and params.stop_loss_pct > 0 else 0.005
+
     # Forward Window Calculation
     indexer = pd.api.indexers.FixedForwardWindowIndexer(window_size=future_window)
     
@@ -51,10 +60,33 @@ def build_label_frame(
     max_upside = (future_max_high - close) / close
     max_downside = (close - future_min_low) / close
 
-    # Label: Unsafe (1) if upside or downside exceeds threshold
-    is_unsafe = (max_upside > vol_threshold) | (max_downside > vol_threshold)
+    # Initialize all as 0 (Noise)
+    labels = np.zeros(len(close), dtype=int)
     
-    labels = is_unsafe.astype(int).values
+    # Class 1: Bull (Strong Upside, Safe Downside)
+    # Note: Using strict inequality < stop_loss to ensure we survive the noise
+    is_bull = (max_upside > vol_threshold) & (max_downside < stop_loss)
+    
+    # Class 2: Bear (Strong Downside, Safe Upside)
+    is_bear = (max_downside > vol_threshold) & (max_upside < stop_loss)
+    
+    # Assign labels
+    labels[is_bull] = 1
+    labels[is_bear] = 2
+    
+    # Note: If both conditions met (rare/impossible due to < stop_loss check usually being smaller than threshold),
+    # the later assignment wins. But logically:
+    # If StopLoss < Threshold, it's impossible to satisfy both Upside > Thresh AND Upside < SL simultaneously.
+    # So overlapping is physically impossible if SL < Threshold. 
+    # If SL > Threshold, overlap is possible (Big Move Up AND Big Move Down). 
+    # In that case, we treat it as Noise (don't overwrite? or overwrite?).
+    # My logic above: if both true, Bear wins. But effectively if SL is minimal, neither is true.
+    # Let's explicitly handle the "Both High" case as Noise (0).
+    
+    if stop_loss >= vol_threshold:
+        # Conflict possible on expanding chop. Force 0.
+        conflict = is_bull & is_bear
+        labels[conflict] = 0
 
     future_close = close.shift(-future_window)
     future_return = (future_close - close) / close.replace(0.0, pd.NA)

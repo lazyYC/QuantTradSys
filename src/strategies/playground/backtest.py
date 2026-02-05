@@ -104,12 +104,19 @@ def backtest_star_xgb(
     probs = probs.reshape(len(dataset), -1)
     
     # Capture Signals (New Logic)
-    # Handle both Multiclass (N, 2) and Binary (N,) output shapes from LightGBM
+    # Handle Multiclass (N, 3), (N, 2) and Binary (N,) output shapes
     if probs.ndim == 1:
         # If 1D, assume it is P(Unsafe) equivalent to column 1 if binary
         volatility_score = probs
+    elif probs.shape[1] == 3:
+        # 3-Class: 0=Noise, 1=Bull, 2=Bear
+        # [MODIFIED] Use Max(Bull, Bear) for visualization alignment.
+        # Previously (1 - Noise) was "Any Trend", but execution requires ONE direction > Threshold.
+        # If Bull=0.3, Bear=0.3 -> AnyTrend=0.6 (looks like breakout) -> But Max=0.3 (No Trade).
+        # Showing Max aligns the chart red line with the actual trade trigger.
+        volatility_score = np.max(probs[:, 1:], axis=1)
     elif probs.shape[1] >= 2:
-        # If 2D, take column 1 (Unsafe)
+        # If 2D (Binary), take column 1 (Unsafe)
         volatility_score = probs[:, 1]
     else:
         # Fallback
@@ -282,9 +289,12 @@ def _build_signal_records(
         probs = np.asarray(predicted_probs, dtype=float)
     probs = probs.reshape(len(dataset), -1)
 
-    # Calculate Prob(Unsafe) directly
+    # Calculate Prob(Unsafe) for compat, but pass FULL probs to simulate
     if probs.ndim == 1:
         volatility_score = probs
+    elif probs.shape[1] == 3:
+        # 3-Class
+        volatility_score = 1.0 - probs[:, 0]
     elif probs.shape[1] >= 2:
         volatility_score = probs[:, 1]
     else:
@@ -293,13 +303,12 @@ def _build_signal_records(
     pred_idx = probs.argmax(axis=1)
     pred_class = CLASS_VALUES[pred_idx]
 
-    # For Binary Classification in v1.6.0, we pass volatility_score as "expected_returns"
-    # because model.py's _simulate_trades expects "expected_returns" to be the signal for Eject/Suspend
-    # See model.py line 303: frame["volatility_score"] = expected_returns
+    # For 3-Class, we pass the FULL probs matrix to _simulate_trades
+    # _simulate_trades logic has been updated in model.py
     
     trades, equity_curve = _simulate_trades(
         dataset,
-        volatility_score, # PASS PROBABILITY HERE
+        probs, # PASS FULL MATRX HERE
         pred_class,
         model_params,
         indicator_params=indicator_params,

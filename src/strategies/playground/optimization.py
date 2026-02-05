@@ -482,7 +482,7 @@ def suggest_indicator_params(
     # v1.8.0 Volatility Breakout Optimization (x5 for 1min)
     params["breakout_window"] = trial.suggest_int("breakout_window", 100, 500, step=50)
     params["atr_trailing_mult"] = trial.suggest_float("atr_trailing_mult", 2.0, 6.0, step=0.5)
-    params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.5, 0.85, step=0.05)
+    params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.30, 0.70, step=0.05)
     
     # ADX Threshold Optimization
     params["adx_threshold"] = trial.suggest_int("adx_threshold", 15, 40, step=5) # Trend Strength > X
