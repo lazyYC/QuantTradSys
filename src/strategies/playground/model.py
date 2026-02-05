@@ -384,6 +384,7 @@ def _simulate_trades(
     # --- Feature Extraction for Filters ---
     trend_ema_window = getattr(ind_params, "trend_ema_window", 200)
     adx_min = getattr(ind_params, "adx_min", 0.0)
+    require_trend = getattr(ind_params, "require_trend_alignment", False)
     
     # Pre-calculate Trend EMA
     trend_ema = frame["close"].ewm(span=trend_ema_window, adjust=False).mean().values
@@ -513,8 +514,21 @@ def _simulate_trades(
             
         # Trigger Condition: AI says "Unsafe" (High Volatility Incoming)
         # Trigger Condition: Directional Bias Check
+        
+        # 0. ADX Filter (Noise Reduction)
+        if adx_min > 0 and adx_values[i] < adx_min:
+            continue
+
         is_bull_signal = p_bull > trigger_thresh
         is_bear_signal = p_bear > trigger_thresh
+
+        # 1. Trend Alignment (Hard Filter)
+        if require_trend:
+            trend_val = trend_ema[i]
+            if is_bull_signal and close_price < trend_val:
+                is_bull_signal = False
+            if is_bear_signal and close_price > trend_val:
+                is_bear_signal = False
 
         # Action Condition: Model Signal Only (Pure Directional Entry)
 
@@ -902,7 +916,10 @@ def _evaluate_vectorized(
 
 
 def _score_metric(metrics: Dict[str, float]) -> float:
-    return float(metrics.get("total_return", 0.0))
+    val = metrics.get("total_return", 0.0)
+    if isinstance(val, pd.Series):
+        val = val.iloc[0] if not val.empty else 0.0
+    return float(val)
 
 
 def _compute_class_means(train_df: pd.DataFrame) -> np.ndarray:

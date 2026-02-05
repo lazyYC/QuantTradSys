@@ -39,14 +39,13 @@ SIM_STATE: Dict[str, Any] = {
     "model_path": None,
     "base_params": {},
     "feature_cache": None,
+    "params_schema": {},  # Dynamic schema from strategy
+    "ui_defaults": {},    # Dynamic defaults from strategy
+    "template_name": "generic_playground.html",  # Dynamic template
 }
 
-class SimParams(BaseModel):
-    trigger_threshold: float
-    bb_std: float
-    atr_trailing_mult: float
-    adx_min: float
-    require_trend_alignment: bool
+# Note: SimParams is now dynamically created based on strategy.get_tunable_params_schema()
+# We'll use a generic dict for the request body instead of a fixed Pydantic model.
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -125,6 +124,13 @@ async def lifespan(app: FastAPI):
     SIM_STATE["strategy"].warm_up(SIM_STATE["candles"])
     LOGGER.info("Warmup complete.")
     
+    # 5. Load Dynamic UI Configuration from Strategy
+    strategy_instance: BaseStrategy = SIM_STATE["strategy"]
+    SIM_STATE["params_schema"] = strategy_instance.get_tunable_params_schema()
+    SIM_STATE["ui_defaults"] = strategy_instance.get_ui_defaults()
+    SIM_STATE["template_name"] = strategy_instance.get_template_name()
+    LOGGER.info(f"UI Config loaded: template={SIM_STATE['template_name']}, params={list(SIM_STATE['params_schema'].keys())}")
+    
     yield
     # Shutdown logic if any
 
@@ -133,14 +139,12 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 @app.get("/", response_class=HTMLResponse)
 async def get_ui(request: Request):
-    return templates.TemplateResponse("playground.html", {
+    # Use dynamic template and defaults from strategy
+    template_name = SIM_STATE.get("template_name", "generic_playground.html")
+    return templates.TemplateResponse(template_name, {
         "request": request,
-        "defaults": {
-            "trigger_threshold": 0.6, # Default to match report.py
-            "bb_std": 2.2,
-            "atr_trailing_mult": 3.0,
-            "adx_min": 20,
-        }
+        "defaults": SIM_STATE.get("ui_defaults", {}),
+        "params_schema": SIM_STATE.get("params_schema", {}),
     })
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -152,22 +156,24 @@ async def chrome_devtools():
     return Response(status_code=200, content="{}")
 
 @app.post("/simulate")
-async def run_simulation(params: SimParams):
+async def run_simulation(request: Request):
+    """Run simulation with dynamically parsed parameters."""
     if SIM_STATE["candles"].empty:
         return {"error": "No data loaded"}
+    
+    # Parse JSON body dynamically
+    body = await request.json()
         
     strategy: BaseStrategy = SIM_STATE["strategy"]
     
     # Merge Request Params with Base Params
-    # We copy base params and override
     current_params = SIM_STATE["base_params"].copy()
     
-    # Override keys
-    current_params["trigger_threshold"] = params.trigger_threshold
-    current_params["bb_std"] = params.bb_std
-    current_params["atr_trailing_mult"] = params.atr_trailing_mult
-    current_params["adx_min"] = params.adx_min
-    current_params["require_trend_alignment"] = params.require_trend_alignment
+    # Override with request params (dynamic keys from schema)
+    params_schema = SIM_STATE.get("params_schema", {})
+    for key in params_schema.keys():
+        if key in body:
+            current_params[key] = body[key]
     
     # Run Backtest
     max_ts = SIM_STATE["candles"]["timestamp"].max()

@@ -122,6 +122,51 @@ class BaseStrategy(ABC):
         """
         pass
 
+    # =========================================================================
+    # Interactive / Visualization Methods (for generic interactive_backtest.py)
+    # =========================================================================
+
+    @abstractmethod
+    def get_tunable_params_schema(self) -> Dict[str, Any]:
+        """
+        Return schema for parameters that can be tuned in the interactive UI.
+        
+        Each key is a parameter name, and the value is a dict with:
+        - type: "float", "int", or "bool"
+        - min, max, step: for numeric types
+        - default: default value
+        - label: human-readable label (optional)
+        
+        Example:
+            {
+                "trigger_threshold": {"type": "float", "min": 0.1, "max": 0.9, "step": 0.05, "default": 0.6},
+                "require_trend_alignment": {"type": "bool", "default": False},
+            }
+        """
+        pass
+
+    @abstractmethod
+    def get_ui_defaults(self) -> Dict[str, Any]:
+        """
+        Return default values for UI sliders/inputs.
+        
+        This should match the keys in get_tunable_params_schema().
+        
+        Returns:
+            Dictionary of parameter names to default values.
+        """
+        pass
+
+    def get_template_name(self) -> str:
+        """
+        Return the name of the Jinja2 template for the interactive UI.
+        
+        Override this if your strategy needs a custom template.
+        Default is 'generic_playground.html'.
+        """
+        return "generic_playground.html"
+
+
     def split_data(
         self, 
         data: pd.DataFrame, 

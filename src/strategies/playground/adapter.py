@@ -268,3 +268,58 @@ class PlaygroundStrategy(BaseStrategy):
 
         return main_result
 
+    # =========================================================================
+    # Interactive / Visualization Methods
+    # =========================================================================
+
+    def get_tunable_params_schema(self) -> Dict[str, Any]:
+        """Define UI schema for tunable parameters."""
+        return {
+            "trigger_threshold": {
+                "type": "float",
+                "min": 0.1,
+                "max": 0.9,
+                "step": 0.05,
+                "default": 0.6,
+                "label": "Trigger Threshold",
+            },
+            "bb_std": {
+                "type": "float",
+                "min": 1.0,
+                "max": 3.5,
+                "step": 0.1,
+                "default": 2.2,
+                "label": "BB Std Dev",
+            },
+            "atr_trailing_mult": {
+                "type": "float",
+                "min": 1.0,
+                "max": 5.0,
+                "step": 0.5,
+                "default": 3.0,
+                "label": "ATR Trailing Mult",
+            },
+            "adx_min": {
+                "type": "int",
+                "min": 0,
+                "max": 50,
+                "step": 5,
+                "default": 20,
+                "label": "ADX Min",
+            },
+            "require_trend_alignment": {
+                "type": "bool",
+                "default": False,
+                "label": "Require Trend Alignment",
+            },
+        }
+
+    def get_ui_defaults(self) -> Dict[str, Any]:
+        """Return default values for UI sliders."""
+        schema = self.get_tunable_params_schema()
+        return {k: v["default"] for k, v in schema.items()}
+
+    def get_template_name(self) -> str:
+        """Use custom playground template if exists, else generic."""
+        return "playground.html"
+

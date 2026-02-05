@@ -485,7 +485,7 @@ def suggest_indicator_params(
     params["trigger_threshold"] = trial.suggest_float("trigger_threshold", 0.30, 0.70, step=0.05)
     
     # ADX Threshold Optimization
-    params["adx_threshold"] = trial.suggest_int("adx_threshold", 15, 40, step=5) # Trend Strength > X
+    params["adx_min"] = trial.suggest_int("adx_min", 15, 40, step=5) # Trend Strength > X
 
     return StarIndicatorParams(**params)
 
