@@ -241,4 +241,4 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    uvicorn.run("interactive_backtest:app", host="0.0.0.0", port=args.port, reload=True)
+    uvicorn.run("interactive_backtest:app", host="0.0.0.0", port=args.port, reload=False)

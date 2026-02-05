@@ -81,6 +81,11 @@ def _build_simple_equity(trades: pd.DataFrame) -> pd.DataFrame:
     closed = trades.dropna(subset=["exit_time", "return"]).copy()
     if closed.empty:
         return pd.DataFrame(columns=["timestamp", "equity"])
+    
+    # Validate return column is a proper Series
+    return_col = closed["return"]
+    if not isinstance(return_col, pd.Series) or len(return_col) == 0:
+        return pd.DataFrame(columns=["timestamp", "equity"])
         
     closed = closed.sort_values("exit_time")
     returns = pd.to_numeric(closed["return"], errors="coerce").fillna(0.0)
