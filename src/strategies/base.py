@@ -165,6 +165,17 @@ class BaseStrategy(ABC):
         Default is 'generic_playground.html'.
         """
         return "generic_playground.html"
+    
+    def get_optimization_metric(self) -> tuple:
+        """
+        Return the optimization metric name and direction.
+        
+        Override for strategies that use different metrics.
+        
+        Returns:
+            tuple: (metric_name, direction) where direction is 'maximize' or 'minimize'
+        """
+        return ("total_return", "maximize")
 
 
     def split_data(

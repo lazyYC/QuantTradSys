@@ -196,7 +196,10 @@ class TrainingEngine:
         
         LOGGER.info(f"Starting optimization for {self.ctx.strategy_name} with config: {config}")
         
-        # Use dev_df (Train+Valid) ONLY
+        # Get strategy-specific optimization metric
+        metric, direction = self.ctx.strategy_instance.get_optimization_metric()
+        LOGGER.info(f"Optimization metric: {metric} ({direction})")
+        
         self.ctx.study = optimize_strategy(
             strategy=self.ctx.strategy_instance,
             raw_data=self.ctx.dev_df,
@@ -205,6 +208,8 @@ class TrainingEngine:
             n_seeds=self.ctx.n_seeds,
             study_name=self.ctx.study_name,
             storage=self.ctx.storage,
+            metric=metric,
+            direction=direction,
             seed=42,
         )
         
