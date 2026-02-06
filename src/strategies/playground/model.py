@@ -297,7 +297,6 @@ def _simulate_trades(
         "exit_price",
         "return",
         "holding_mins",
-        "holding_mins",
         "entry_prob", # Replaces entry_volatility_score
         "exit_prob",  # Replaces exit_volatility_score
         "entry_class",
