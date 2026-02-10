@@ -33,11 +33,25 @@ def suggest_primary_params(trial: optuna.Trial) -> PrimarySignalParams:
 
 def suggest_barrier_params(trial: optuna.Trial) -> TripleBarrierParams:
     """Suggest triple barrier parameters."""
-    return TripleBarrierParams(
-        take_profit_pct=trial.suggest_float("take_profit_pct", 0.003, 0.01, step=0.001),
-        stop_loss_pct=trial.suggest_float("stop_loss_pct", 0.002, 0.007, step=0.001),
-        max_holding_bars=trial.suggest_int("max_holding_bars", 120, 480, step=60),
-    )
+    use_atr = trial.suggest_categorical("use_atr", [True])
+    
+    if use_atr:
+        return TripleBarrierParams(
+            use_atr=True,
+            atr_window=trial.suggest_int("atr_window", 10, 60, step=5),
+            tp_atr_mult=trial.suggest_float("tp_atr_mult", 1.0, 4.0, step=0.5),
+            sl_atr_mult=trial.suggest_float("sl_atr_mult", 1.0, 4.0, step=0.5),
+            max_holding_bars=trial.suggest_int("max_holding_bars", 60, 240, step=30),
+            min_profit_pct=0.003,
+        )
+    else:
+        return TripleBarrierParams(
+            use_atr=False,
+            take_profit_pct=trial.suggest_float("take_profit_pct", 0.003, 0.015, step=0.001),
+            stop_loss_pct=trial.suggest_float("stop_loss_pct", 0.002, 0.01, step=0.001),
+            max_holding_bars=trial.suggest_int("max_holding_bars", 120, 480, step=60),
+            min_profit_pct=0.003,
+        )
 
 
 def suggest_meta_params(trial: optuna.Trial) -> MetaModelParams:
@@ -46,7 +60,7 @@ def suggest_meta_params(trial: optuna.Trial) -> MetaModelParams:
         num_leaves=trial.suggest_int("num_leaves", 15, 63),
         max_depth=trial.suggest_int("max_depth", 4, 8),
         learning_rate=trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
-        n_estimators=trial.suggest_int("n_estimators", 100, 400, step=50),
+        n_estimators=trial.suggest_int("n_estimators", 50, 200, step=50),
         min_child_samples=trial.suggest_int("min_child_samples", 10, 50),
         reg_alpha=trial.suggest_float("reg_alpha", 0.01, 1.0, log=True),
         reg_lambda=trial.suggest_float("reg_lambda", 0.01, 1.0, log=True),

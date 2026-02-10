@@ -169,10 +169,23 @@ class MetaLabelStrategy(BaseStrategy):
                 LOGGER.warning("No signal_df or feature cache, using train_data directly")
                 signal_df = train_data
         
+        # Check feature cache
+        # In current optimization, volatility_window/volume_window are fixed (20).
+        # So meta tools are static for the same raw_data.
+        if self._feature_cache is None:
+            LOGGER.info("Building meta-model features (Cache Miss)...")
+            self._feature_cache = build_meta_features(signal_df, meta_params)
+        else:
+            # We assume features are static during optimization
+            # In a production system, we should check if meta_params match cached params
+            pass
+            
+        features_df = self._feature_cache
+        
         # Train meta-model
         result = train_meta_model(
             labeled_df=train_data,
-            full_df=signal_df,
+            features_df=features_df,
             params=meta_params,
             model_dir=model_dir,
             seed=seed,
@@ -235,8 +248,29 @@ class MetaLabelStrategy(BaseStrategy):
                 "min": 0.001,
                 "max": 0.01,
                 "step": 0.001,
-                "default": 0.003,
+                "default": 0.005,
                 "label": "Stop Loss %",
+            },
+            "use_atr": {
+                "type": "bool",
+                "default": True,
+                "label": "Use ATR Barriers",
+            },
+            "tp_atr_mult": {
+                "type": "float",
+                "min": 1.0,
+                "max": 5.0,
+                "step": 0.5,
+                "default": 2.0,
+                "label": "Takeprofit ATR Mult",
+            },
+            "sl_atr_mult": {
+                "type": "float",
+                "min": 1.0,
+                "max": 5.0,
+                "step": 0.5,
+                "default": 2.0,
+                "label": "Stoploss ATR Mult",
             },
             "rsi_oversold": {
                 "type": "float",
@@ -285,9 +319,14 @@ class MetaLabelStrategy(BaseStrategy):
     
     def _parse_barrier_params(self, params: Dict[str, Any]) -> TripleBarrierParams:
         return TripleBarrierParams(
-            take_profit_pct=params.get("take_profit_pct", 0.005),
-            stop_loss_pct=params.get("stop_loss_pct", 0.003),
-            max_holding_bars=params.get("max_holding_bars", 240),
+            use_atr=params.get("use_atr", True),
+            atr_window=params.get("atr_window", 20),
+            tp_atr_mult=params.get("tp_atr_mult", 2.0),
+            sl_atr_mult=params.get("sl_atr_mult", 2.0),
+            take_profit_pct=params.get("take_profit_pct", 0.003),
+            stop_loss_pct=params.get("stop_loss_pct", 0.005),
+            max_holding_bars=params.get("max_holding_bars", 120),
+            min_profit_pct=params.get("min_profit_pct", 0.005),
         )
     
     def _parse_meta_params(self, params: Dict[str, Any]) -> MetaModelParams:

@@ -33,7 +33,7 @@ class MetaModelResult:
 
 def train_meta_model(
     labeled_df: pd.DataFrame,
-    full_df: pd.DataFrame,
+    features_df: pd.DataFrame,
     params: MetaModelParams,
     model_dir: str,
     seed: int = 42,
@@ -43,7 +43,7 @@ def train_meta_model(
     
     Args:
         labeled_df: DataFrame with signal bars and meta_labels
-        full_df: Full OHLCV data for feature computation
+        features_df: DataFrame with pre-computed meta features
         params: Meta model parameters
         model_dir: Directory to save model
         seed: Random seed
@@ -53,8 +53,8 @@ def train_meta_model(
     """
     LOGGER.info(f"Training meta-model on {len(labeled_df)} labeled samples...")
     
-    # Build features for all data
-    all_features = build_meta_features(full_df, params)
+    # Features are already built and passed in features_df
+    all_features = features_df
     
     # Extract features for labeled samples
     feature_cols = get_feature_columns()
@@ -97,7 +97,7 @@ def train_meta_model(
         valid_names=["train", "valid"],
         callbacks=[
             lgb.early_stopping(stopping_rounds=30),
-            lgb.log_evaluation(period=50),
+            lgb.log_evaluation(period=-1),  # Silence per-iteration logs
         ],
     )
     
@@ -114,18 +114,24 @@ def train_meta_model(
     }
     
     if len(np.unique(y_val)) > 1:
-        metrics["auc"] = roc_auc_score(y_val, y_pred_proba)
+        try:
+            metrics["auc"] = roc_auc_score(y_val, y_pred_proba)
+        except Exception:
+            metrics["auc"] = 0.5
+    else:
+        metrics["auc"] = 0.5
     
-    LOGGER.info(f"Validation Metrics: {metrics}")
-    LOGGER.info(f"\n{classification_report(y_val, y_pred, target_names=['Unprofitable', 'Profitable'])}")
+    # Minimal logging
+    LOGGER.info(
+        f"Validation Metrics: F1={metrics['f1']:.4f}, AUC={metrics.get('auc', 0):.4f}, "
+        f"Precision={metrics['precision']:.4f}, Recall={metrics['recall']:.4f}"
+    )
     
     # Feature importance
     importance = pd.DataFrame({
         "feature": feature_cols,
         "importance": model.feature_importance(importance_type="gain"),
     }).sort_values("importance", ascending=False)
-    
-    LOGGER.info(f"Feature Importance:\n{importance.to_string()}")
     
     # Save model
     model_path = Path(model_dir) / "meta_model.joblib"
@@ -136,8 +142,6 @@ def train_meta_model(
         "feature_columns": feature_cols,
         "params": params,
     }, model_path)
-    
-    LOGGER.info(f"Meta-model saved to {model_path}")
     
     return MetaModelResult(
         model_path=model_path,

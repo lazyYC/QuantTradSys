@@ -33,13 +33,26 @@ class PrimarySignalParams:
 class TripleBarrierParams:
     """Parameters for Triple Barrier labeling."""
     
-    # Barrier levels (as percentage of entry price)
+    # Barrier Type
+    use_atr: bool = True       # Use ATR for dynamic width
+    atr_window: int = 20       # ATR lookback
+    
+    # ATR Multipliers (if use_atr=True)
+    tp_atr_mult: float = 2.0
+    sl_atr_mult: float = 2.0
+    
+    # Fixed Percentages (if use_atr=False)
     # Note: TP < SL ratio favors shorter trades hitting profit first
     take_profit_pct: float = 0.003  # 0.3%
     stop_loss_pct: float = 0.005    # 0.5%
     
+    # Minimum profit threshold (to cover transaction costs)
+    # 0.001 entry + 0.001 exit = 0.002 cost.
+    # We require profit > 0.002 to be labeled as 1.
+    min_profit_pct: float = 0.002
+    
     # Vertical barrier (max holding time in bars)
-    max_holding_bars: int = 180  # 3 hours at 1min timeframe
+    max_holding_bars: int = 120  # Reduced to 2 hours
     
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)

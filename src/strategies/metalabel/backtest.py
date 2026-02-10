@@ -39,13 +39,51 @@ def simulate_trade(
     entry_price = entry_bar["close"]
     entry_time = entry_bar["timestamp"]
     
+    # Calculate barrier distances
+    if barrier_params.use_atr:
+        # We need ATR at this point. 
+        # Ideally ATR should be pre-calculated in df. 
+        # But for now, let's look back.
+        # Efficient way: compute ATR once for backtest.
+        # Here we just assume it's in df columns OR compute on fly (slow).
+        # Let's assume passed in df has 'atr' column if backtest runner added it.
+        # Fallback to computing on fly window:
+        start_lookback = max(0, entry_idx - barrier_params.atr_window - 1)
+        # Slicing is slow inside loop, but robust.
+        # Better: run_backtest should pre-compute ATR.
+        pass # Logic moved to caller or simplified here?
+        
+    # See run_backtest for ATR pre-calc
+    atr_val = df.iloc[entry_idx].get("atr", 0.0)
+    
+    stop_loss_pct = barrier_params.stop_loss_pct
+
+    if barrier_params.use_atr and atr_val > 0:
+        tp_dist = atr_val * barrier_params.tp_atr_mult
+        atr_sl_dist = atr_val * barrier_params.sl_atr_mult
+        
+        # Dual Step Loss: If fixed stop_loss_pct is set (and > 0), use the tightest one
+        if stop_loss_pct is not None and stop_loss_pct > 0:
+            fixed_sl_dist = entry_price * stop_loss_pct
+            sl_dist = min(atr_sl_dist, fixed_sl_dist)
+        else:
+            sl_dist = atr_sl_dist
+    else:
+        tp_dist = entry_price * barrier_params.take_profit_pct
+        sl_dist = entry_price * stop_loss_pct
+
+    # Enforce minimum profit distance (cover transaction costs) for backtest consistency
+    min_tp_dist = entry_price * barrier_params.min_profit_pct
+    if tp_dist < min_tp_dist:
+        tp_dist = min_tp_dist
+
     # Calculate barriers
     if signal == 1:  # Long
-        take_profit = entry_price * (1 + barrier_params.take_profit_pct)
-        stop_loss = entry_price * (1 - barrier_params.stop_loss_pct)
+        take_profit = entry_price + tp_dist
+        stop_loss = entry_price - sl_dist
     else:  # Short
-        take_profit = entry_price * (1 - barrier_params.take_profit_pct)
-        stop_loss = entry_price * (1 + barrier_params.stop_loss_pct)
+        take_profit = entry_price - tp_dist
+        stop_loss = entry_price + sl_dist
     
     max_exit_idx = min(entry_idx + barrier_params.max_holding_bars, len(df) - 1)
     
@@ -125,6 +163,14 @@ def run_backtest(
     # Ensure sorted by timestamp
     df = df.sort_values("timestamp").reset_index(drop=True)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    
+    # Pre-calculate ATR if needed
+    if barrier_params.use_atr:
+        tr1 = df["high"] - df["low"]
+        tr2 = (df["high"] - df["close"].shift(1)).abs()
+        tr3 = (df["low"] - df["close"].shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        df["atr"] = tr.rolling(window=barrier_params.atr_window).mean().fillna(0)
     
     # Generate primary signals
     signal_df = generate_primary_signals(df, primary_params)

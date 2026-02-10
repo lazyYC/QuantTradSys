@@ -39,6 +39,16 @@ def apply_triple_barrier(
     high = df["high"].values
     low = df["low"].values
     
+    # Calculate ATR if needed
+    if params.use_atr:
+        tr1 = df["high"] - df["low"]
+        tr2 = (df["high"] - df["close"].shift(1)).abs()
+        tr3 = (df["low"] - df["close"].shift(1)).abs()
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        atr = tr.rolling(window=params.atr_window).mean().fillna(0).values
+    else:
+        atr = None
+    
     df_index = df.index.tolist()
     
     for sig_idx in signal_indices:
@@ -52,12 +62,27 @@ def apply_triple_barrier(
         signal_value = df.loc[sig_idx, "signal"]
         
         # Calculate barrier prices
+        # Calculate barrier prices
+        if params.use_atr and atr is not None and atr[pos] > 0:
+            volatility = atr[pos]
+            tp_dist = volatility * params.tp_atr_mult
+            sl_dist = volatility * params.sl_atr_mult
+        else:
+            tp_dist = entry_price * params.take_profit_pct
+            sl_dist = entry_price * params.stop_loss_pct
+
+        # Enforce minimum profit distance (cover transaction costs)
+        # If ATR is too low, we must extend TP to at least min_profit_pct
+        min_tp_dist = entry_price * params.min_profit_pct
+        if tp_dist < min_tp_dist:
+            tp_dist = min_tp_dist
+
         if signal_value == 1:  # Long
-            take_profit_price = entry_price * (1 + params.take_profit_pct)
-            stop_loss_price = entry_price * (1 - params.stop_loss_pct)
+            take_profit_price = entry_price + tp_dist
+            stop_loss_price = entry_price - sl_dist
         else:  # Short
-            take_profit_price = entry_price * (1 - params.take_profit_pct)
-            stop_loss_price = entry_price * (1 + params.stop_loss_pct)
+            take_profit_price = entry_price - tp_dist
+            stop_loss_price = entry_price + sl_dist
         
         # Scan forward to find exit
         meta_label = 0  # Default: unprofitable
